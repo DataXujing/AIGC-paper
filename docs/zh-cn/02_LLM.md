@@ -1,3 +1,9 @@
+<!-- chatGLM,MINIGPT-4, LLaMa, Firefly,BiLLa,stable-vicuna-13B,alpaca-13b,opt,本草，langChhian(guidance),Alpaca_LoRa,Falcon-40B,CaMa,guanaco-->
+
+<!-- chatGLM,MINIGPT-4, LLaMa, alpaca，本草，langChian-->
+<!-- 下载GPT-4, InstrcutGPT,还有这些大模型的paper -->
+
+
 ## 1.GLM
 
 <!-- https://zhuanlan.zhihu.com/p/538866002 -->
@@ -1158,15 +1164,630 @@ $x_2^{FP32}$为正，我们在量化前从 $c_2$ 中减去平均值以将值居�
 
 今天介绍一篇OpenAI的神作CLIP，文章发表在ICML-2021，于2021年3月挂在arXiv上的。截至2022年3月，文章已有700+引用量，可见其影响力。
 
+!> paper: https://arxiv.org/pdf/2103.00020.pdf
 
-## 5.QFormer
+!> Blog: https://openai.com/research/clip
+
+!> github:https://github.com/openai/CLIP
+
+#### 1.1 Abstract
+
+当前的计算机视觉（CV）模型通常被训练用于预测有限的物体类别。这种严格的监督训练方式限制了模型的泛化性和实用性，因为这样的模型通常还需要额外的标注数据来完成训练时未曾见过的视觉“概念”。直接从图片的描述文本中学习是一个有潜力的选择，因为这样我们可以获取更多的监督信号。这篇文章中，我们证明了利用一个简单的预训练任务（即预测哪个文本描述对应当前图像）在一个从互联网上搜集的4亿个（图像，文本）对的数据集上可以取得SOTA的图像表征。预训练完之后，在下游任务上，我们可以通过用自然语言（文本）匹配视觉概念（图像）从而实现zero-shot transfer。我们在30个不同类型的下游CV 任务上进行了基准测试，并展示了我们模型强大的迁移能力，其在很多下游任务上不需要任何额外的数据也能比拟完全supervised的模型。比如，我们的模型在ImageNet上的zero-shot accuracy能达到在ImageNet上全监督训练的ResNet-50的性能。
+
+#### 1.2 Motivation
+
+在NLP中，预训练的方法目前其实已经被验证很成功了，像BERT和GPT系列之类的。其中，GPT-3从网上搜集了400 billion byte-pair-encoded tokens进行预训练然后可以在很多下游任务上实现SOTA性能和zero-shot learning。这其实说明从web-scale的数据中学习是可以超过高质量的人工标注的NLP数据集的。
+
+然而，对于CV领域，目前预训练模型基本都是基于人工标注的ImageNet数据集（含有1400多万张图像），那么借鉴NLP领域的GPT-3从网上搜集大量数据的思路，我们能不能也从网上搜集大量图像数据用于训练视觉表征模型呢？
+
+作者先是回顾了并总结了和上述相关的两条表征学习路线：
+
+（1）构建image和text的联系，比如利用已有的（image，text）pair数据集，从text中学习image的表征；
+
+（2）获取更多的数据（不要求高质量，也不要求full labeled）然后做弱监督预训练，就像谷歌使用的JFT-300M数据集进行预训练一样（在JFT数据集中，类别标签是有噪声的）。具体来说，JFT中一共有18291个类别，这能教模型的概念比ImageNet的1000类要多得多，但尽管已经有上万类了，其最后的分类器其实还是静态的、有限的，因为你最后还是得固定到18291个类别上进行分类，那么这样的类别限制还是限制了模型的zero-shot能力。
+
+这两条路线其实都展现了相当的潜力，前者证明paired text-image可以用来训练视觉表征，后者证明扩充数据能极大提升性能，即使数据有noise。于是high-level上，作者考虑从网上爬取大量的（text，image）pair以扩充数据，同时这样的pairs是可以用来训练视觉表征的。作者随即在互联网上采集了4亿个（text，image）对，准备开始训练模型。
+
+#### 1.3 Model
+
+##### 1.3.1 Objective
+
+海量的（image，text）数据有了，问题是怎么设计并高效地训练模型。作者提出CLIP的模型，可以认为是ConVIRT[1]的简化版。这里先简单回顾下ConVIRT (咋一看是不是觉得CLIP和ConVIRT一摸一样... ).
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p1.jpg" /> 
+</div><p align=center>ConVIRT</p>
+
+ConVIRT用（image，text）对来训练模型，其有一个image encoder和一个text encoder，训练目标是让两路的representation尽可能得一致（对偶地最大化表征的agreement），其中$g_v$和$g_u$函数是一个non-linear的projection head，负责分别将图像和文本表征投影到一个shared的空间，从而计算距离。
+
+损失函数部分其实就是构造了一个对称的contrastive loss，在一个batch内预测谁是正样本。
+
+基于ConVIRT，CLIP主要做出了以下简化：
+
++ ConVIRT中的image encoder的参数是ImageNet初始化的，而CLIP直接用random初始化；
++ ConVIRT的projection head是non-linear的，而CLIP采用linear的projection；(ConVIRT在后面的实验中也提到将non-linear换做linear，模型效果会下降；但CLIP中则说二者没有区别。)
++ CLIP去掉了ConVIRT中text transformation(指均匀从text中采样句子)；
++ CLIP的image transformation只用了resize和squared crop；
++ CLIP loss中的temperature参数τ是可学的。
++ 另外，二者的loss在形式上有些区别，ConVIRT的loss直接通过最大化$<u_i,v_i>$
+ 或者 $<v_i,u_i>$；而CLIP加入了标签，用$<u_i,v_i>$的结果和标签去做交叉熵。(具体见修仙：[论文笔记](https://zhuanlan.zhihu.com/p/579493763) CLIP4.3 小节)；(目前我还不知道这两种在理论上是否等价？或者哪一种的实验效果更好一点？)
+
+于是CLIP的预训练模型就有了：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p2.png" /> 
+</div>
+
+一个batch里有N对（image，text），然后和ConVIRT一样做对称的contrastive learning（对比学习），伪代码如下：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p3.png" /> 
+</div>
+
+##### 1.3.2 Inference / Zero-shot prediction
+
+一旦CLIP训练好了，我们就可以做zero-shot prediction了，如Figure 1. (2)所示.
+
+步骤可以整理成下面这样：
+
++ Sample所有N个class，得到N个input text，都经过text encoder编码得到对应的N个class text embedding（我这里之所叫embedding而不叫representation是想说明这个特征是经过encoding和projection得到的）；
++ Sample一个要预测的image，得到其image embedding；
+以N个text embedding为key，以当前image embedding为query，算cosine相似度，相似度最高的即为Top-1的prediction class。
+
+预测过程的代码如下：
+
+```python
+import os
+import clip
+import torch
+from torchvision.datasets import CIFAR100
+
+# Load the model
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model, preprocess = clip.load('ViT-B/32', device)
+
+# Download the dataset
+cifar100 = CIFAR100(root=os.path.expanduser("~/.cache"), download=True, train=False)
+
+# Prepare the inputs
+image, class_id = cifar100[3637]
+image_input = preprocess(image).unsqueeze(0).to(device)
+text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}") for c in cifar100.classes]).to(device)
+
+# Calculate features
+with torch.no_grad():
+    image_features = model.encode_image(image_input)
+    text_features = model.encode_text(text_inputs)
+
+# Pick the top 5 most similar labels for the image
+image_features /= image_features.norm(dim=-1, keepdim=True)
+text_features /= text_features.norm(dim=-1, keepdim=True)
+similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)
+values, indices = similarity[0].topk(5)
+
+# Print the result
+print("\nTop predictions:\n")
+for value, index in zip(values, indices):
+    print(f"{cifar100.classes[index]:>16s}: {100 * value.item():.2f}%")
+```
+
+##### 1.3.3 Training
+
+1. text encoder
+
+作者统一采用GPT-2里的Transformer结构；对于base size model，使用63M-parameter 12-layer 512-width model with 8 attention heads；model width则随着image encoder的size增加而增加。输入句子的最大长度为76。
+
+2. image encoder
+
+这里作者一共训练了8个不同的image encoder（5 ResNets & 3 ViTs），分别如下：
+
+```python
+_MODELS = {
+    "RN50": "https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt",
+    "RN101": "https://openaipublic.azureedge.net/clip/models/8fa8567bab74a42d41c5915025a8e4538c3bdbe8804a470a72f30b0d94fab599/RN101.pt",
+    "RN50x4": "https://openaipublic.azureedge.net/clip/models/7e526bd135e493cef0776de27d5f42653e6b4c8bf9e0f653bb11773263205fdd/RN50x4.pt",
+    "RN50x16": "https://openaipublic.azureedge.net/clip/models/52378b407f34354e150460fe41077663dd5b39c54cd0bfd2b27167a4a06ec9aa/RN50x16.pt",
+    "RN50x64": "https://openaipublic.azureedge.net/clip/models/be1cfb55d75a9666199fb2206c106743da0f6468c9d327f3e0d0a543a9919d9c/RN50x64.pt",
+    "ViT-B/32": "https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt",
+    "ViT-B/16": "https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt",
+    "ViT-L/14": "https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt",
+}
+
+```
+
+其中ResNets做了一个小的修改：将ResNet编码出来的结果再经过一个attention pooling（比如一个2048x7x7的feature，用attention pooling成一个2048x1的feature）；对于ViTs也做了一个小的修改：在tokens（patch tokens和pos tokens相加）被送到Transformer之前，让tokens先经过一个layer norm层，此外参数的初始化和原来的ViTs也有微小的不同。
+
+3. Other configuration
+
++ optimizer：Adam；
++ training epochs：32；
++ batch size：32768；
++ precision：half-precision
+
+#### 1.4 Experiment
+
+实验部分我这里重点focus在CV相关部分。
+
+**Zero-shot CLIP v.s. Linear Probe on ResNet50**
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p4.png" /> 
+</div>
+
+CLIP的胜率在16/27，已经很强了，因为CLIP是zero-shot的，即没有用下游任务的数据，而linear probed ResNet50用了下游数据进行finetune逻辑回归分类器的参数。
+
+**Prompt engineering and ensembling**
+
+作者默认prompt模板是："A photo of a {label}."，但作者发现这样的模板还是有点粗糙，可以考虑加一些context比如"A photo of a {label}, a type of pet."。对于不同类型任务，作者做了一些手动的、特定的prompt工程。
+
+从另一个角度，一张图的text描述其实有很多种的，只要text的核心语义和image相同就行，那么我们还可以做一些ensemble，比如ensemble一下"A photo of a big {label}."和"A photo of a small {label}."。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p5.png" /> 
+</div><p align=center>Prompt ablation</p>
+
+可以发现，采用Prompt engineering+ensembling的效果比只用没有上下文的类别名好得多。
+
+（PS：作者这里的发现直接motivate了之后的CoOp[2]，CoCoOp[3]之类learnable prompting的工作，后面有时间我会专门写一期关于这个的。
+
+**Few-shot CLIP v.s. SOTA (ImageNet) SSL methods**
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p6.png" /> 
+</div><p align=center>y: 20个测试数据集上的平均得分; x: shots</p>
+
++ Zero-shot CLIP的性能和4-shot CLIP差不多；
++ Few-shot CLIP的performance远高于之前的SOTA模型。
+
+**How many shots is needed for achieving zero-shot performance**
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p7.png" /> 
+</div>
+
+Few-shot (linear probing) CLIP （保持CLIP encoder 参数fixed，加一层逻辑回归分类器微调）平均需要20.8-shots才能match zero-shot CLIP性能。这里相当于保持了the same CLIP feature space上，观察few-shot finetuning和zero-shot的性能差异。这里其实说明通过自然语言学到的视觉概念比少量样本finetune学到的好。
+
+**Linear probing CLIP performance**
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p8.png" /> 
+</div>
+
+总体上，两者的性能是正相关的，此外，大部分情况下linear probing的性能要好不少。
+
+再来一个linear probing的天梯图：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p9.png" /> 
+</div>
+
+CLIP GOAT！！！
+
+**Robustness to Natural Distribution Shift**
+
+作者在ImageNet的7个shift datasets上观察各模型的平均性能。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-1/p10.png" /> 
+</div>
+
+说实话，做domain adaptation（DA）/generalization（DG）的人看到这里应该挺兴奋，新的鲁棒特征来啦。不过问题来了，左边这张图是不是也反映了representation learning比DA、DG technique更重要呢？（那么，我们真的需要花那么大力气去卷DA嘛... 说不定通过这种大规模pretraining就能很大程度上解决domain shift的问题。但另一方面，DA、DG也可以在这些pretraining得到的表征上锦上添花。怎么说都有道理，但我更prefer to CLIP这类表征学习的意义。
+
+CLIP的实验非常丰富，这里只是抛砖引玉地挑了几个我个人觉得比较有意思的实验讲，具体地还是推荐大家去看原文。
+
+#### 1.5 Limitation
+
+这个部分往往容易被人忽略，但其实个人觉得，limitation和conclusion部分往往有作者们更深入的思考，这里简单总结下CLIP的limitation：
+
++ CLIP的zero-shot性能虽然总体上比supervised baseline ResNet-50要好，但其实在很多任务上比不过SOTA methods，因此CLIP的transfer learning有待挖掘；
++ CLIP在这几种task上zero-shot性能不好：fine-grained分类（花的分类、车的分类之类的）、抽象的任务（如计算图中object的个数）以及预训练时没见过的task（如分出相邻车辆的距离）。BTW，在这些任务上zero-shot性能不好，不代表CLIP pretrained encoders就没用了，CLIP encoders还是能提供很强的视觉先验的；
++ Zero-shot CLIP在真正意义上的out-of-distribution data上性能不好，比如在OCR中；
++ 尽管CLIP zero-shot classifier能在很广泛的任务上work，但究其本质CLIP还是在有限的类别中进行对比、推理，而不能像image caption那样完全的flexible地生成新的概念（如：词），这是CLIP功能上的缺陷，CLIP终究不是生成模型；
++ CLIP仍然没有解决深度学习poor data efficiency的问题，结合CLIP和self-training可能是一个能提高data efficiency的方向；
++ CLIP的方法论上也存在几个缺陷：在训练和挑选CLIP模型时，作者采用在几个数据的validation performance来做指导，这其实是不准确的，因为它不能完全代表CLIP的zero-shot性能。如果，设计一套框架来evaluate zero-shot performance对于之后的研究是很重要的；
++ CLIP的训练数据是从网上采集的，这些image-text pairs没有做data clear和de-bias，这可能会使模型有一些social biases；
++ 很多视觉任务很难用text来表达，如何用更高效的few-shot learning方法优化CLIP也很重要。
+
+
+到此，CLIP基本讲完，总体来说，对于深度学习来说是优化时代意义的，这可能标志着我们即将迎来data-centric deep learning时代，印证了Andrew Ng的一句名言：“Your model is good enough. Focus on the data!”(大概这个意思，词句不完全准确)。
+
+---
+### 2.BLIP:Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+<!-- https://zhuanlan.zhihu.com/p/619222354 -->
+
+<!-- https://blog.csdn.net/zzl1299249769/article/details/123233997 -->
+
+<!-- cross attention: https://zhuanlan.zhihu.com/p/621287866 -->
+
+<!-- 补充Cross Attentio,bidirectional self-attention, causal self-attention layers -->
+<!-- VLP: vision-Language Pre-training -->
+
+大多数现有的VLP(vision-Language Pre-training)模型大多仅仅在understanding-based tasks 或者 generation-based tsaks表现良好，但很少在这两方面都能取得较好的结果。
+同时，性能的增大往往来自于数据集的扩大，但是现有的数据集大多数是web网络上采集下来的img-text pair。这些大规模从网络上采集下来的数据往往包含大量的noise，不利于模型的训练。
+基于以上两点，作者提出了BLIP模型，能灵活的解决understanding-based tasks和generation-based tasks。同时运用知识蒸馏的思想，利用一个captioner和一个filter生成 synthetic(合成的) captions和过滤掉noisy的pair，最终获得bootstrapping dataset，送入下一次pre-train。
+
+#### 2.1 Motivatin
+
+现在大多数模型都选择的是encoder-based model或者encoder-decoder model。但是encoder-based model很难运用到生成任务中去，与此同时encoder-decoder model也很难运用到image-text retrieval（检索） 任务中去。
+如今SOTA的方法，大多运用到了web中搜集的大规模数据。但是在web中收集到的这些img-text pair大多数都是noisy的，不利于模型的训练。
+
+#### 2.2 Contribution
+
+1. Multimodal（多模态） mixture of Encoder-Decoder(MED)：MED包含unimodal encoder，image-grounded text encoder以及image-grounded text decoder三个部分。三个部分对应三个VL objectives来进行pre-train，分别是：: image-text contrastive learning, image-text matching, and image conditioned language modeling.
+2. Captioning and Filtering(CapFilt)：是一种从noisy img-text pair中进行dataset bootstrapping的方法。将pre-train的MED分为两部分进行finetune，一部分是captioner，从web图像中生成synthetic captions，另一部分是filter，过滤掉生成的caption以及web图像中noisy的图像文本对。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p1.png" /> 
+</div>
+
+如上图所示captioner通过web图片生成caption，filter分别判断原来的web上的text与生成的caption是否是noise，如果是，则过滤掉。
+
+#### 2.3 Modal
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p2.png" /> 
+</div><p align=center> 图 2. BLIP 的预训练模型架构和目标（相同的参数具有相同的颜色）。 我们提出了编码器-解码器的多模式混合，这是一种统一的视觉-语言模型，可以在以下三种功能之一中运行：(1) 单模式编码器使用图像-文本对比 (ITC) 损失进行训练，以对齐视觉和语言表示。 (2) Image-grounded text encoder 使用额外的交叉注意层来模拟视觉-语言交互，并使用图像-文本匹配 (ITM) 损失进行训练以区分正负图像-文本对。 (3) Image-grounded text decoder用causal self-attention layers代替bi-directional self-attention layers，与encoder共享相同的cross-attention layers和feed forward networks。 解码器使用语言建模 (LM) 损失进行训练，以生成给定图像的字幕。</p>
+
+!> 我们将在下文详细讲解：cross Attention,bidirectional self-attention, causal self-attention!
+
+如上图所示，整个MED包含了三个部分:
+
+1. Unimodal encoder：分别对image和text进行编码。其中对image的编码是使用的ViT的模式，先把一个图片打成一块一块的patch再输入transformer；对text的编码就和BERT一致，添加一个[CLS]token表示全局的文本信息。
+2.  Image-grounded Text encoder：在BERT的基础上，在FFN和SA之间增加了一个Cross Attention层，以为网络注入图像信息。文本中附加了一个[Encoder]token，用于表示img-text pair的多模态表示信息。
+3. Image-grounded Text decoder：在Image-grounded Text encoder的基础上，将Bi self-attention层换为了casual self-attention层，用于decoder操作。decoder即为bert的decoder形式，调用BertLMHeadModel（is_decoder=true）, 常用在language modeling里面，添加mask，预测下一个词。同时文本中附加一个[Decoder]token用于表示序列的开始,[EOS]表示序列的结束。
+
+显然，经由上述的三个模块，这个MED模型就拥有了同时匹配generation-based tasks和understanding-based tasks的能力
+
+#### 2.4 Pre-training objectives
+
+本文在pre-training的时候使用了三个objectives，分别是两个understanding-based objectives和一个generatin-based objectives。
+
+1. Image-Text Contrastive Loss (ITC)：通过contrastive learning 的思想，对齐视觉transformer和文本transformer的特征空间，目的是为了获得更加优质的image和text的representation，具体操作可以参考ALBEF这篇文章。
+
+2. Image-Text Matching Loss (ITM)：旨在学习image-text multimodal representation，来捕获视觉和语言的细粒度对齐。简单的来啊说就是图文匹配，最后输出一个二分类，positive or negative
+
+3. Image-Text Matching Loss (ITM)：三个tasks中的生成任务，为给定的图片生成对应的 description。与广泛用于VLP的MLM损失相比，LM使模型具有将视觉信息转换为连贯字幕的泛化能力。
+
+#### 2.5 CapFilt
+
+由于大规模预训练的文本-图片对通常是从web上找出来的，该文本通常无法准确描述图像的视觉内容，从而使它们成为嘈杂的信号，对于学习视觉语言对齐不是最佳的。
+
+由此，作者提出了一个CapFilt架构用来提高image-text pair的质量。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p3.png" /> 
+</div>
+
+如上图所示，其中$(I_w,T_w)$代表web image-text pair，$(I_h,T_h)$代表高质量的手工标注的image-text pair。
+
+它引入了两个模块：一个基于web图像生成caption的captioner，以及一个用于去除image-text pair噪声的filter。captioner和filter都是从同一个预训练过的MED模型中初始化的，并在COCO数据集上单独微调。微调是一个轻量级的过程。
+
+整个过程大概为：先进行pre_train，之后利用$I_h,T_hI$分别对captioner和filter进行finetune，captioner给定web图片生成对应的caption，filter利用ITM判断web图片-文字对和web图片-生成caption对是否match，如果不match，则过滤掉，最后将过滤后剩余的图片-文字对和$I_h,T_h$合在一起pre_train一个新model。个人理解比较像一个新颖的online self-knowledge distillation。
+
+#### 2.6 Experiment
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p4.png" /> 
+</div>
+
+上图是提出的captioner和filter对最后结果的影响。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p5.png" /> 
+</div>
+
+上图是parameters sharing策略对最后结果的影响。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p6.png" /> 
+</div>
+
+上图是image-text retirval中与其他SOTA任务的对比，可以看出有较大提升。
+
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p7.png" /> 
+</div>
+
+上图是与其他image caption SOTA方法的对比
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p8.png" /> 
+</div>
+
+上图是与其他VQA,NLVR SOTA方法的对比。
+
+更多的实验可以参考BLIP原paper.
+
+#### 2.7 Conclusion
+
+作者提出的BLIP架构在大范围的downstream任务上达到了SOTA的效果，其中包括了understanding-based tasks和generation-based tasks。同时模型使用了一种dataset bootstrapping的方法来解决web中收集的大量noisy数据的问题。
+
+作者还提出有几个潜在的方法可能可以提高BLIP的性能：
+
+1. 进行多轮的dataset bootstrapping
+2. 为每幅图片生成多个caption，来扩大语料库
+3. 训练多个captioner和filter，并进行model ensemble
+
+#### 2.8 对比学习（contrastive learning）
+
+<!-- https://arxiv.org/abs/2107.07651 -->
+<!-- https://zhuanlan.zhihu.com/p/346686467 -->
+
+对比式学习着重于学习同类实例之间的共同特征，区分非同类实例之间的不同之处。
+
+与生成式学习比较，对比式学习不需要关注实例上繁琐的细节，只需要在抽象语义级别的特征空间上学会对数据的区分即可，因此模型以及其优化变得更加简单，且泛化能力更强。
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p10.jpg" /> 
+</div>
+
+
+**对比学习**的目标是学习一个编码器，此编码器对同类数据进行相似的编码，并使不同类的数据的编码结果尽可能的不同。
+
+!> 关于对比学习的综述性介绍可以参考：[光某人的 对比学习（Contrastive Learning）综述](https://zhuanlan.zhihu.com/p/346686467)
+
+
+#### 2.9 BLIP中的cross attention,bidirectional self-attention, causal self-attention
+
+<!-- https://zhuanlan.zhihu.com/p/32501462?edition=yidianzixun&yidian_docid=0I59CUVb -->
+
+1. cross attention
+
++ 拥有两个序列S1、S2
++ 计算S1的K、V
++ 计算S2的Q
++ 根据K和Q计算注意力矩阵
++ 将V应用于注意力矩阵
++ 输出的序列长度与S2一致
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p11.png" /> 
+</div>
+
+2. bidirectional self-attention
+
+这里的bidirectional self-attention指的的就是BERT中的self-attention机制
+
+3. causal self-attention
+
+<!-- https://www.cnblogs.com/gongqk/p/14772297.html -->
+!> https://arxiv.org/abs/2103.03493
+
+Attention 机制现在广泛应用在各领域和各模型之中，attention 涉及到了 Q-K-V 操作，想法是用 Q 去查找 K 中跟自己相似的成分，然后获得新的表示，具体做法就是先用 Q 和 K 求一个相似度作为权重，然后利用相似度对 V 进行加权获得一个新的表示，这个新的表示就融合了 Q 和 K 的相似度信息。
+
+用 image caption 举例说明了 vision-language 领域里两种使用 attention 的方式，如下图所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p12.png" /> 
+</div>
+
+主要用到了两种 attention 模块，一种是 self-attention，另一种是 top-down attention。输入 X 包含了句子特征以及图像特征（RoI 特征），由于Q 与 K、V 相同，经过 self-attention 得到的新的特征表示，蕴含了图像特征之间的关联，例如上图中新的特征可能学到了人与马之间的关系。第二步就是 top-down attention 模块，这里把 Q 换成了句子特征，当用 Q 与 K 求权重的时候，其实就是在求图像特征中哪些成分与句子特征更相关，例如根据“man”可能就会认为人所在的区域的图像特征权重更大，然后再用这个权重对图像特征加权后，所得到的新特征就是与句子相关的视觉特征。最后我们根据这个句子相关的视觉特征来做预测效果就会更好，因为它融入了两个模态相似度的信息。
+
+那么这里面存在什么问题呢？
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p13.png" /> 
+</div>
+
+比如上面最左边的图，问题中关键字是“What sport”、“on screen”，但经过训练后的 attention 却把注意力放在了人身上（红色框），即提取到的句子相关的视觉特征是那两个人的区域，最后得到了错误的答案“Dancing”，而我们希望的是模型能够将注意力放在图像的屏幕区域，是什么导致了错误的 attention 呢？
+
+[《Causal Attention for Vision-Language Tasks》](https://arxiv.org/abs/2103.03493)作者认为是在训练集中，“Sport+Man”的出现次数远远高于“Sport+Screen”的次数，这样的偏倚让 attenion 学习的时候，会把“Sport”和人所在区域的图像特征联系起来，认为它们二者具有高相关性。但如果在测试集中，“Sport”和人所在区域的图像特征并没有这么高的相关性时（即训练集和测试集的分布不一致），那么在测试集中预测的时候带上这样的偏倚，很可能就会做出错误的预测。
+
+**因果图**
+
+如上面分析，数据集带来了 bias，从而产生了一些虚假的相关性（“Sport”和人图像特征），而建模和消除虚假相关性正是因果理论擅长的事，现在来看看作者是怎么对整个 vision-language 进行因果建模的，当然这是作者自己的想法，因果图并不是唯一确定的东西。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p14.png" /> 
+</div>
+
+首先如第一张图所示，X 表示输入的数据，即原始的句子以及图像特征，Z 代表了句子相关的图像知识，X 和 Z 之间就存在着一个 `X->Z` 的因果关系，因为 Z 是 X 通过 attention 机制生成的嘛。然后利用 Z 去对最终结果 Y 做预测，显然这里也存在着 `Z->Y`，所以第一张图说明了从 `X->Z->Y` 的一条因果路径，即 X 通过 attention 机制做出的预测，这也是本文的重点研究目标。
+
+如果只有这一条路径显然就不存在虚假的相关性，那么下一步作者就对为什么会产生虚假相关性这一点进行了建模，如下图所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p15.png" /> 
+</div>
+
+这里 C 表示常识，`C->X` 表明视觉数据或者特征本质上是由常识生成的，例如第一张图中人骑马的图可以认为是常识“人可以骑马”生成的。M 表示 `{person, horse}` 的 object 集，它也是从图像中提取出来的（例如使用 Faster R-CNN），而它本身的值域也是由常识 C 决定的，最后对词的预测是根据 object 集做出的预测，所以是 `M->Y`。
+
+**从因果角度看 Attention**
+
+有了因果图后，首先先从因果角度看下 attention 机制，即 `X->Z->Y` 这条因果路径，传统的模型是基于相关性
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p16.png" /> 
+</div>
+
+这里是只考虑 `X->Z->Y` 因果图下的公式，还是比较直观的，`P(Y|Z=z)`表示知识对 `Y` 的预测，`P(Z=z|X)`表示根据 `X` 来选择相关的知识，不同的知识重要程度不同。按照我的理解，z 就是 attention 机制里的 K 和 V，`P(Z=z|X)`其实就是 Q 和 K 求到的权重 α。
+
+但公式里是根据这个 `P(Z=z|X)` 对每个 z 对 Y 的预测结果 `P(Y|Z=z)` 求期望，也就是 IS-Sampling 操作，而 attention 是先根据 α对 z 求了个期望，用这个期望的 z 再去做预测。这个细微的区别我看了几遍论文才看出来，按照作者的意思这两个是等价的，而且由于 attention 是先对输入求了期望，然后光把这个期望值丢进网络 forward 一边，肯定要比把所有输入全部 forward 然后在期望代价要小得多。
+
+论文第 7 部分的公式 (19) 有类似的推导，即公式 (19) 的最后一行，本来按照前面的推导求期望应该停留在 g 外面，一开始不知道为啥作者的推导直接塞到函数的输入里了，后来我觉得应该是反正还不知道拟合结果怎样，那不如就先对输入求个期望，然后对期望 forward 之后的结果，让它和这两个操作反过来（先 forward 再期望）的结果一样不就行了。
+
+总之，attention 的 Q-K-V 操作可以和这个条件概率公式对应起来了。
+
+**消除偏倚**
+
+正如前面构建的因果图，如果直接拟合 `P(Y|X)`会带来 bias，bias 产生的原因是 C 这个 confounder，即 `X<-C->M->Y` 这条非因果路径，由于我们又没有 C 的数据，所以 back-door 是别想了。而我们想求的是 `X->Z->Y`这条因果路径事实上也不需要 C 的数据。首先看 `X->Z`，X 和 Z 之间唯一能让信息流动的就只有这一条，别的路径统统被 `M->Y<-Z` 给对撞没了，所以 X 和 Z 之间没有混杂。
+
+关键是 Z 和 Y 之间存在混杂，不过幸运地是这个混杂可以通过对 X 进行 adjust 给消除掉，而 X 的数据是我们有的，所以接下来就简单了，如下进行 back-door （关于 back-door 可以参考下别人的讲解的，简单来说就是分情况讨论，在不同的 X 下，`P(Y|X=x,Z)` 是该情况下 Z 对 Y 的因果效应，那么根据 X 的不同情况求个平均即可）：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p17.png" /> 
+</div>
+
+CS-Sampling跟上面的IS-Sampling一样也是求期望的操作，区别在于前者是来自于不同的样本，后者仅来自于当前样本。同时为了和 do(X) 里的 X 区分开，这里换成 x′
+。在后面会看到作者也和 attention 里的做法类似，直接把 CS-Sampling 丢给输入 Z 了。
+
+有了 X 对 Z 因果以及 Z 到 Y 的因果，那么自然就能得到 X 到 Y 的因果（通过 Z）。结合两个公式，即把 `P(Y|X)` 展开式里的 `P(Y|Z)` 替换为 `P(Y|do(X))`，得到
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p18.png" /> 
+</div>
+
+即去偏倚后的 attention 比原来多了一个求期望的步骤。
+
+**IS-ATT(In-Sample Attention) 和 CS-ATT(Cross-Sample Attention)**
+
+本论文核心就是要实现上面这个`P(Y|do(X))`，首先我们先构造一个函数 `g(⋅)`来拟合 `P(Y|Z,X)`
+，为了表示分布在 `g`外面套一个 softmax，如下
+$$P(Y|Z,X)=Softmax[g(Z,X)]$$
+
+最终结果 `P(Y|do(X))`就是 `P(Y|Z,X)`计算了两次期望（IS-Sampling 以及 CS-Sampling），然后如前面所说，为了减少数据 forward 次数，直接把这两个求期望塞到最原始的输入那里去做（具体推导可以见论文第 7 部分），总之这里直接放结果
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p19.png" /> 
+</div>
+
+据这个推导，作者提出了两个 attention，一个就对应了原来的 attention，即 IS-ATT，另一个就是 CS-ATT，如下图
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-2/p20.png" /> 
+</div>
+
+---
+### 3.BLIP2:Bootstrapping Language-Image Pre-training with Frozen Image Encoders and Large Language Models
+
+
+<!-- https://blog.csdn.net/qq_41994006/article/details/129221701 -->
+
+<!-- https://zhuanlan.zhihu.com/p/624647342 -->
+<!-- https://zhuanlan.zhihu.com/p/613247637 -->
+<!-- https://zhuanlan.zhihu.com/p/606364639 -->
+
+
+!> https://arxiv.org/pdf/2301.12597.pdf
+
+**TL;DR**
+
+2023 年 Salesforce 出的文章，提出了 BLIP2，一种通用而有效的预训练策略，它从现成的冻结参数的图像编码器和冻结参数的大型语言模型中引导视觉语言预训练，在 Image Captioning、VQA、Image-Text Retrieval（图文检索） 任务的多个数据集上取得 SOTA
+
+**背景**
+
++ 由于大规模模型的端到端训练，视觉和语言预训练的成本变得越来越高
++ 为了降低计算成本并抵消灾难性遗忘的问题，希望在 Vision-language pre-training (VLP) 中固定视觉模型参数与语言模型参数。然而，由于语言模型在其单模态预训练期间没有看到图像，因此冻结它们使得视觉语言对齐尤其具有挑战性
+
+**本文方案**
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-3/p1.png" /> 
+</div>
+
++ 本文提出了BLIP-2，这是一种通用而有效的预训练策略，它从现成的冻结预训练图像编码器和冻结的大型语言模型中引导视觉语言预训练
++ BLIP-2通过一个轻量级的 Querying Transformer （Q-Former是一个轻量级的 transformer，它使用一组可学习的查询向量来从冻结图像编码器中提取视觉特征，为LLM提供最有用的视觉特征，以输出所需的文本） 弥补了模态 gap，该 Transformer 分两个阶段进行预训练
+    - 第一阶段从冻结图像编码器引导视觉-语言表示学习，强制 Q-Former 学习与文本最相关的视觉表示（学习表征特征）
+    - 第二阶段基于冻结的语言模型引导从视觉到语言的生成学习，将Q-Former的输出连接到冻结的LLM，并对Q-Former进行训练，使其输出视觉表示能够被LLM解释（生成任务）
++ 由于Image Encoder和LLM是冻结的，因此BLIP2的训练十分高效，比Flamingo少了54倍参数，但性能还提升了8.7%。为什么说BLIP2提出了一个通用的框架，是因为frozen的Image Encoder和LLM可以任意替换，文中Image Encoder是VIT, LLM是Flan T5.
+
+BLIP2 优势：
+
++ 2 stage 训练（表征学习阶段和生成学习阶段）有效利用冻结的预训练图像模型和语言模型，视觉问答、图像字幕和图像文本检索三个任务上取得了 SOTA
++ 由 LLM (如 OPT、FlanT5) 提供支持，BLIP-2 可以被提示执行遵循自然语言指令的 zero-shot 图像到文本生成，这实现了诸如视觉知识推理、视觉对话等新兴功能
+由于使用了冻结的单模态模型和轻量级的Q-Former，BLIP-2比现有技术的计算效率更高。比如，BLIP-2 在 zero-shot VQAv2 上比 Flamingo 高 8.7%，可训练参数减少了 54 倍。
+
+**模型架构**
+
+!> 第一阶段的任务：表征特征
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-3/p2.png" /> 
+</div>
+
++ 提出Q-Former作为可训练模块，以弥合冻结图像编码器和冻结LLM之间的差距。它从图像编码器中提取固定数量的输出特征，与输入图像分辨率无关
++ 如图所示，Q-Former中有两个子模块，一个是Image Transformer，与Image Encoder交互用于视觉特征的抽取，第二个是Text Transformer，其可以用于encode也可以用于decode（与BLIP不同，BLIP中encode和decode的SA层参数不共享。）
++ 值得注意的是Image Transformer的Input， Learned Queries是一定长度的可训练的参数向量，论文采用了32个query embeddding且维度和text保持一致都是768(Query Embedding 就没有[CLS]token的概念)。
++ Q-Former 包含 188M 参数，导入 BERTbase pretrain 参数，cross-attention layers 随机初始化，query 维度 `32×768`（明显小于图像编码器输出特征维度 `257 × 1024`）
+
+训练任务：
+
++ Image-Text Contrastive Learning（ITC)， 文本端还是采用CLS token，但值得注意的是 Query Embedding 就没有[CLS]token的概念，因此对于一张图片的每一个query，我们都计算其与文本端CLStoken的相似度，并取最大的一个;学习对齐图像表示和文本表示，以使它们的相互信息最大化。通过对比正负对的图像-文本相似性来实现这一点
+为了避免信息泄漏，采用了 unimodal self-attention 掩码，不允许 query 和文本相互查看.
++ Image-grounded Text Generation(ITG), 强迫Q-Former去抽取能捕获绝大部分文本信息的视觉特征，注意生成任务的时候用的是Multi-modal Causal Attention，以防数据泄露。训练 Q-Former 生成文本，将输入图像作为条件;由于 Q-Former 的架构不允许冻结图像编码器和文本 tokens 之间的直接交互，因此生成文本所需的信息必须首先由 query 提取，然后通过 self-attention 传递给文本 tokens。因此，query 被迫提取包含文本所有信息的视觉特征;使用 multimodal causal self-attention 掩码来控制 query 与文本交互。query 可以相互关注，但不能关注文本 tokens。每个文本 tokens 都可以处理所有 query 及其以前的文本标记.
++ Image-Text Matching(ITM)，细颗粒的文本与图像的对齐任务。与ITC类似，因为有多个queries，作者会把每一个query和text的CLS放入一个二分类头中获取logit，最后取平均作为最后的output logit。这是一个二进制分类任务，要求模型预测图像文本对是正（匹配）还是负（不匹配）;使用 bi-directional self-attention 掩码，所有查询和文本都可以相互关注。因此，输出的 query embedding 捕获多模态信息
+
+
+!> 第二阶段任务：文本生成任务
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-3/p3.png" /> 
+</div>
+
++ 在生成预训练阶段，将 QFormer（附带冻结图像编码器）连接到冻结 LLM，以获取LLM 的生成语言能力
++ 使用 FC 层将QFormer 输出的 query embedding 线性投影到与 LLM 的文本 embedding 相同的维度。将投影的 query embedding 附加到输入文本 embedding
+    - 它们用作 soft visual prompts，以 Q-Former 提取的视觉表示为 LLM 提供条件
+    - 由于 Q-Former 已经有预训练以提取富含语言信息性的视觉表示，因此它有效地充当了一个信息 bottleneck，将最有用的信息提供给 LLM，同时去除不相关的视觉信息，减轻了 LLM 学习视觉语言对齐的负担，从而减轻了**灾难性遗忘问题**
++ 实验两种类型的LLM：基于解码器的LLM和基于编码器-解码器的LLMs
+    - 对于基于解码的LLM，对语言建模损失进行预训练，其中冻结的LLM的任务是生成基于Q-Former视觉表示的文本
+    - 对于基于编码器-解码器的LLM，使用前缀语言建模损失进行预训练，将文本分成两部分。前缀文本与视觉表示连接，作为LLM编码器的输入。后缀文本用作LLM解码器编码器的生成目标
+
+训练任务：
+
++ Pre-train 数据和 BLIP 一样
+    - 总共 129M 图片，来源于
+    - COCO
+    - Visual Genome
+    - CC3M
+    - CC12M
+    - SBU
+    - LAION400M (115M图片)
+    - 使用 CapFilt 方法为网络图片合成 caption，也即基于 BLIPlarge 为每张图生成 10 个 captions。基于 CLIP ViT-L/14 模型产生的图像文本相似性，将合成 caption 与原始网络 caption 一起排序。保持每个图像的前两个 caption 作为训练数据，并在每个预训练步骤中随机抽取一个 caption
+
++ Pre-trained image encoder and LLM
+    - vision transformer：将最后一层删除，使用倒数第二层特征
+    - ViT-L/14 from CLIP
+    - ViT-G/14 from EVA-CLIP
+
++ frozen language model
+    - decoder-based LLMs： unsupervised-trained OPT
+    - encoder-decoder-based LLMs：instruction-trained FlanT5
+
++ Pre-training settings
+    - 一阶段训练 250k steps，二阶段训练 80k steps
+    - 第一阶段对ViT-L/ViT-G使用2320/1680的 batchsize，在第二阶段对OPT/FlanT5使用1920/1520的 batchsize
+    - 在预训练期间，将冻结的ViTs和LLM参数转换为FP16，但FlanT5除外，使用BFloat16。与 32 bit 模型相比没有精度损失
+    - 使用一台16-A100（40G）机器，最大型号ViT-G和FlanT5 XXL第一阶段需要不到6天，第二阶段需要不超过3天
+
+
+**实验结果**
+
+Instructed Zero-shot Image-to-Text Generation: BLIP2 支持通过指令控制图像到文本的生成，只需在视觉提示后附加文本提示作为LLM的输入。下图展示了各种各样的 zero-shot 图像到文本生成功能的示例，包括视觉知识推理、视觉注释推理、视觉对话、个性化图像到文本生成
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-3/p4.png" /> 
+</div>
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-3/p5.png" /> 
+</div>
+
+Zero-shot VQA:对于 OPT 模型，prompt 为 "Question: {} Answer:"；对于 FlanT5 模型，prompt 为 "Question: {} Short answer:"
+还将长度惩罚设置为-1，这鼓励更短的答案与人类注释更一致。BLIP2 在 VQAv2 和 GQA 上取得 SOTA 结果，在 OK-VQA 上差于 Flamingo，原因可能是 OK-VQA 更关注开放世界知识，而不是视觉理解，Flamingo80B 中的 70B Chinchilla 语言模型拥有比11B FlanT5XXL 更多的知识。更强的图像编码器或更强的LLM都会带来更好的性能
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-3/p6.png" /> 
+</div>
+
+VQA finetune 实验：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-3/p7.png" /> 
+</div>
+
+finetune 实验配置
++ 微调 Q-Former 和图像编码器的参数，同时保持LLM冻结
++ 为了提取与问题更相关的图像特征，Q-Former 以 question 为条件。具体而言，问题 token 被作为 Q-Former 的输入，并通过 self-attention 与 query 交互，这可以引导 Q-Former cross attention 层关注提供更多信息的图像区域
++ 基于 VQAv2 和 Visual Genome 的数据进行 finetune
+
+
+**Thoughts**
+
+基于 Q-former 来作为视觉和文本模态的连接模块看起来很合理，有效降低训练的资源消耗
+文章的 Limitation 中提到，BLIP2 在 VQA 任务中的 in-context learning 效果一般，作者将缺乏上下文学习能力归因于文章使用的预训练数据集：每个样本只包含一个图像-文本对。导致 LLM 无法从中学习单个序列中多个图像文本对之间的相关性。
+Flamingo 为了解决这个问题，使用一个 close-sourced 的交错图像和文本数据集（M3W），每个序列有多个图像-文本对
 
 
 
 
 
-
-
-
-
-<!-- chatGLM,MINIGPT-4, LLaMa, Firefly,BiLLa,stable-vicuna-13B,alpaca-13b,opt,本草，langChhian(guidance),Alpaca_LoRa,Falcon-40B,CaMa,guanaco-->
