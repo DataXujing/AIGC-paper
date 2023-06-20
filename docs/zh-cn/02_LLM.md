@@ -1787,7 +1787,1334 @@ finetune 实验配置
 文章的 Limitation 中提到，BLIP2 在 VQA 任务中的 in-context learning 效果一般，作者将缺乏上下文学习能力归因于文章使用的预训练数据集：每个样本只包含一个图像-文本对。导致 LLM 无法从中学习单个序列中多个图像文本对之间的相关性。
 Flamingo 为了解决这个问题，使用一个 close-sourced 的交错图像和文本数据集（M3W），每个序列有多个图像-文本对
 
+------
+------
+## 5. LLaMa：Open and Efficient Foundation Language Models
+
+<!-- https://zhuanlan.zhihu.com/p/617745693 -->
+
+论文介绍了LLaMA，它是一组基础语言模型，参数范围从7B到65B。在数万亿的tokens上训练的模型，并表明可以专门使用公开可用的数据集来训练最先进的模型，而无需求助于专有和不可访问的数据集。特别是，LLaMA-13B在大多数基准测试中都优于GPT-3（175B），并且LLaMA-65B与最好的模型Chinchilla-70B和PaLM-540B具有竞争力。
+
+### 5.1 介绍
+
+在大量文本语料库上训练的大型语言模型（LLM）已经显示出它们从文本指令或几个例子中执行新任务的能力（Brown et al.，2020）。当将模型缩放到足够大时，这些few-shot 特性首次出现（Kaplan等人，2020年），导致一系列工作集中于进一步缩放这些模型（Chowdhery等人，2022年；Rae等人，2021）。这些努力是基于这样一种假设，即更多的参数将带来更好的性能。然而，Hoffmann等人最近的工作（2022）表明，对于给定的计算预算，最佳性能不是通过最大的模型实现的，而是通过在更多数据上训练的较小模型实现的。
+
+Hoffmann等人（2022）的缩放规律的目标是确定如何为特定的训练计算预算最佳地缩放数据集和模型大小。然而，这个目标忽略了推理预算，这在大规模服务于语言模型时变得至关重要。在这种情况下，给定目标性能水平，首选模型不是训练最快的，而是推理最快的。尽管训练大型模型以达到一定的性能水平可能更便宜，但训练时间更长的小型模型最终推理更便宜。例如，尽管Hoffmann等人（2022）建议在200Btoken上训练10B模型，但论文发现即使在1T tokens之后，7B模型的性能也会继续提高。
+
+这项工作的重点是训练一系列语言模型，通过训练比通常使用的tokens更多的tokens，在不同的推理预算下实现尽可能好的性能。由此产生的模型称为LLaMA，其参数范围从7B到65B，与现有的最佳LLM相比具有竞争力。例如，LLaMA-13B在大多数基准测试中都优于GPT-3，尽管它比GPT-3小10倍。我们相信，这个模型将有助于LLM的访问和研究民主化，因为它可以在单个GPU上运行。在规模的高端，论文的65B参数模型也与最好的大型语言模型（如Chinchilla或PaLM-540B）具有竞争力。
+
+与Chinchilla、PaLM或GPT-3不同，论文只使用公开可用的数据，使论文工作与开源兼容，而大多数现有模型依赖于未公开或未记录的数据（例如“Books–2TB”或“Social media conversations”）。存在一些例外，特别是OPT（Zhang等人，2022）、GPT-NeoX（Black等人，2022）。
+
+在本文的其余部分中，论文概述了我们对Transformer架构所做的修改（Vaswani et al.，2017），以及训练方法。然后，报告的模型的性能，并在一组标准基准上与其他LLM进行比较。最后，使用负责任的人工智能社区的一些最新基准，揭示了模型中编码的一些偏见。
+
+### 5.2 方法
+
+论文的训练方法类似于之前工作中描述的方法（Brown et al.，2020；Chowdhery et al.，2022），并受到Chinchilla比例规律的启发（Hoffmann et al.，2021）。使用标准优化器在大量文本数据上训练大型Transformer。
+
+#### 5.2.1 预训练数据集
+
+训练数据集是表1中报告的几个来源的混合，涵盖了一组不同的领域。在大多数情况下，论文重用已被用来训练其他LLM的数据源，但限制只能使用公开可用且与开源兼容的数据。这导致了以下数据及其在训练集中所代表的百分比的混合：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p1.png" /> 
+</div><p align=center> 表1：预训练数据。用于预训练的数据混合，对于每个子集，我们列出了采样比例、在1.4T tokens上训练时在该子集上执行的epochs数以及磁盘大小。1T tokens上的预训练运行具有相同的采样比例。</p>
+
+**英语CommonCrawl[67%]**。论文使用CCNet pipline 预处理了2017年至2020年的五个CommonCrawl 转储（Wenzek et al.，2020）。该过程在行级别消除重复数据，使用fastText线性分类器执行语言识别以删除非英语页面，并使用ngram语言模型过滤低质量内容。此外，训练了一个线性模型来对维基百科中用作参考文献的页面进行分类。随机抽样的页面，以及未被分类为参考文献的丢弃页面。
+
+**C4 [15%]**。在探索性实验中，观察到使用不同的预处理CommonCrawl数据集可以提高性能。因此，将公开可用的C4数据集（Raffel et al.，2020）包含在数据中。C4的预处理还包括重复数据消除和语言识别步骤：与CCNet的主要区别在于质量过滤，它主要依赖于启发式方法，如标点符号的存在或网页中的单词和句子的数量。
+
+**Github [4.5%]**。论文使用Google BigQuery上提供的公共GitHub数据集。只保留了在Apache、BSD和MIT许可证下分发的项目。此外，使用基于行长度或字母数字字符比例的启发式方法过滤低质量文件，并使用正则表达式删除样板文件，如标头。最后，在文件级别对生成的数据集进行重复数据消除，并进行精确匹配。
+
+**维基百科[4.5%]**。添加了2022年6月至8月期间的维基百科转储，涵盖20种语言，使用拉丁语或西里尔文：bg、ca、cs、da、de、en、es、fr、hr、hu、it、nl、pl、pt、ro、ru、sl、sr、sv、uk。论文处理数据以删除超链接、注释和其他格式样板。
+
+**Gutenberg 和 Books3 [4.5%]**。论文在训练数据集中包括两个图书语料库：Gutenberg项目，其中包含公共领域的图书，以及ThePile的Books3部分（Gao et al.，2020），这是一个用于训练大型语言模型的公开数据集。论文在书本本级别执行重复数据消除，删除内容重叠超过90%的书本。
+
+**ArXiv[2.5%]**。我们处理arXiv Latex文件，将科学数据添加到数据集中。继Lewkowycz等人（2022）之后，删除了第一节之前的所有内容以及参考书目。还删除了.tex文件中的注释，并内联扩展了用户编写的定义和宏，以提高论文之间的一致性。
+
+**Stack Exchange [2%]**。包括Stack Exchange，这是一个高质量问答网站，涵盖了从计算机科学到化学的一系列不同领域。保留了28个最大网站的数据，删除了文本中的HTML标签，并按分数（从高到低）对答案进行了排序。
+
+**Tokenizer**。使用字节对编码（BPE）算法（Sennrich et al.，2015）对数据进行标记，使用PensionePiece（Kudo和Richardson，2018）的实现。值得注意的是，论文将所有数字拆分为单个数字，并回退到字节以分解未知的UTF-8字符。
+
+总体而言，整个训练数据集在标记化后包含大约1.4T的tokens。对于大多数训练数据，每个token在训练期间只使用一次，但维基百科和图书领域除外，论文在这两个领域执行了大约两个epochs。
+
+#### 5.2.2 架构
+
+继最近对大型语言模型的研究之后，论文网络基于Transformer架构（Vaswani et al.，2017）。论文利用了随后提出的各种改进，并在不同的模型中使用，如PaLM。以下是与原始建筑的主要区别，以及论文在那里找到了这一变化的灵感：
+
+**预归一化[GPT3]**。为了提高训练稳定性，对每个Transformer子层的输入进行归一化，而不是对输出进行归一化。使用了Zhang和Sennrich（2019）引入的RMSNorm规范化函数。
+
+**SwiGLU激活功能[PaLM]**。用Shazeer（2020）引入的SwiGLU激活函数取代了ReLU非线性，以提高性能。论文使用$\frac{2}{3}4d$的尺寸，而不是PaLM中的4d。
+
+**旋转嵌入[GPTNeo]**。删除了绝对位置嵌入，而是在网络的每一层添加了Su等人（2021）引入的旋转位置嵌入（RoPE）
+
+#### 5.2.3 优化器
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p2.png" /> 
+</div><p align=center> 表2：模型大小、体系结构和优化超参数。</p>
+
+论文的模型使用AdamW优化器（Loshchilov和Hutter，2017）进行训练，具有以下超参数：`β1=0.9，β2=0.95`。使用余弦学习率计划，使得最终学习率等于最大学习率的`10%`。论文使用0.1的权重衰减和1.0的梯度剪裁。使用2000个预热步骤，并随着模型的大小而改变学习率和批次大小（详见表2）。
+
+#### 5.2.4 高效实现
+
+论文进行了一些优化，以提高模型的训练速度。首先，使用causal多头注意力的有效实现来减少内存使用和运行时间。此实现在xformers库中提供，受到Rabe和Staats（2021）的启发，并使用了Dao等人（2022年）提供的向后方法。这是通过不存储注意力权重和不计算由于语言模型任务的因果性质而被掩盖的`key/query`分数来实现的。
+
+为了进一步提高训练效率，减少了在带有检查点的后向传球过程中重新计算的激活次数。更准确地说，保存了计算成本高昂的激活，例如线性层的输出。这是通过手动实现Transformer层的向后功能来实现的，而不是依赖PyTorch autograd。如Korthikanti等人所述，为了充分受益于这种优化，需要通过使用模型和序列并行性来减少模型的内存使用。（2022）。此外，论文还尽可能多地重叠激活的计算和GPU之间通过网络的通信（由于all_reduce操作）。
+
+当训练65B参数模型时，在2048 A100 GPU和80GB RAM上处理大约380个tokens/秒/GPU。这意味着，在包含1.4T tokens的数据集上进行训练大约需要21天。
+
+### 5.3 主要结果
+
+根据之前的工作（Brown等人，2020），论文考虑了zero-shot和few-shot任务，并报告了总共20个基准的结果：
+
+**Zero-shot**。论文提供了任务的文本描述和一个测试示例。该模型要么使用开放式生成提供答案，要么对提出的答案进行排名。
+
+**Few-shot**。提供了一些任务示例（介于1和64之间）和一个测试示例。该模型将该文本作为输入，并生成答案或对不同的选项进行排序。
+
+将LLaMA与其他基座模型进行了比较，即非公开可用的语言模型GPT-3（Brown等人，2020）、Gopher（Rae等人，2021）、Chinchilla（Hoffmann等人，2022）和PaLM（Chowdhery等人，2022。在第4节中，还简要比较了LLaMA与OPT-IML（Iyer et al.，2022）和Flan-PaLM（Chung et al.，2021）等指令调优模型。
+
+论文在自由形式生成任务和多选任务上评估LLaMA。在多选任务中，目标是根据提供的上下文，在一组给定的选项中选择最合适的答案。在给定上下文的情况下，选择具有最高可能性的答案。遵循Gao等人（2021）的方法，使用由补全字符数归一化的可能性，但某些数据集（OpenBookQA、BoolQ）除外，论文遵循Brown等人（2020）的方法，给定“Answer"的completion 似然进行归一化：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p3.png" /> 
+</div>
+
+#### 5.3.1 常识推理
+
+考虑了八个标准常识推理基准：BoolQ（Clark等人，2019年）、PIQA（Bisk等人，2020年）、SIQA（Sap等人，201九年）、HellaSwag（Zellers等人，20119年）、WinoGrande（Sakaguchi等人，2021）、ARC easy and challenge（Clarks等人，2018年）和OpenBookQA（Mihaylov等人，2018）。这些数据集包括Cloze和Winograd风格的任务，以及多选问题回答。论文在zero-shot环境中进行评估，就像在语言模型社区中一样。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p4.png" /> 
+</div><p align=center> 表3：常识推理任务的zero-shot性能。</p>
+
+在表3中，将不同规模的现有模型和相应论文的报告编号进行了比较。首先，LLaMA-65B在除BoolQ之外的所有报告基准上都优于Chinchilla-70B。同样，除了在BoolQ和WinoGrande上，该模型在任何地方都超过了PaLM-540B。LLaMA-13B模型虽然小了10倍，但在大多数基准测试中也优于GPT-3。
+
+#### 5.3.2 闭卷问答
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p5.png" /> 
+</div><p align=center> 表4：自然问题，精确的匹配性能。</p>
+
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p6.png" /> 
+</div><p align=center> 表5:TriviaQA。zero-shot和few-shot在过滤的开发集上精确匹配性能。</p>
+
+论文在两个闭卷问答基准上将LLaMA与现有的大型语言模型进行了比较：自然问题（Kwiatkowski et al.，2019）和TriviaQA（Joshi et al.，2017）。对于这两个基准，报告了在闭卷环境中的精确匹配性能，即模型无法访问包含回答问题的证据的文档。在表4中，报告了NaturalQuestions的性能，在表5中，报告了TriviaQA。在这两个基准上，LLaMA-65B在zero-shot和few-shot设置中实现了最先进的性能。更重要的是，LLaMA-13B在GPT-3和Chinchilla的这些基准测试中也具有竞争力，尽管它比GPT-3小5-10倍。该模型在推理过程中运行在单个V100 GPU上。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p7.png" /> 
+</div><p align=center> 图3：Natural Questions（左）和TriviaQA（右）的格式化数据集示例。</p>
+
+
+#### 5.3.3 阅读理解
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p8.png" /> 
+</div><p align=center> 表6：阅读理解。zero-shot精度。</p>
+
+根据RACE阅读理解基准评估模型（Lai et al.，2017）。这个数据集是从为中国中学生和高中生设计的英语阅读理解考试中收集的。遵循Brown等人（2020）的评估设置，并在表6中报告结果。在这些基准测试中，LLaMA-65B与PaLM-540B具有竞争力，并且LLaMA-13B的性能优于GPT-3几个百分点。
+
+#### 5.3.4 数学推理
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p9.png" /> 
+</div><p align=center> 表7：定量推理数据集上的模型性能。对于多数投票，使用与Minerva相同的设置，MATH使用k=256个样本，GSM8k使用k=100个样本（Minerva 540B MATH使用k=64个样本，GSM 8k使用k=40个样本）。LLaMA-65B在GSM8k上的表现优于Minerva 62B，尽管它尚未在数学数据上进行微调。</p>
+
+
+根据两个数学推理基准评估模型：MATH（Hendrycks等人，2021）和GSM8k（Cobbe等人，2021）。MATH是一个用LaTeX编写的12K中学和高中数学问题的数据集。GSM8k是一组中学数学问题。在表7中，与PaLM和Minerva进行了比较（Lewkowycz等人，2022）。Minerva是一系列对从ArXiv和Math网页中提取的38.5B tokens进行微调的PaLM模型，而PaLM和LLaMA都没有对数学数据进行微调。PaLM和Minerva的数字取自Lewkowycz等人（2022），比较有和没有maj1@k。maj1@k表示为每个问题生成k个样本并进行多数投票的评估（Wang et al.，2022）。在GSM8k上，观察到LLaMA-65B的性能优于Minerva-62B，尽管它尚未在数学数据上进行微调。
+
+#### 5.3.5 代码生成
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p10.png" /> 
+</div><p align=center> 表8：代码生成的模型性能。报告了HumanEval和MBPP的pass@score。HumanEval的生成是在零样本和MBBP中进行的，带有类似于Austin等人（2021）的3次触发提示。标有*的数值取自Chowdhery等人（2022）的数字。</p>
+
+论文评估了模型在两个基准上根据自然语言描述编写代码的能力：HumanEval（Chen等人，2021）和MBPP（Austin等人，2021）。对于这两项任务，模型都会收到用几句话描述的程序，以及一些输入输出示例。在HumanEval中，它还接收一个函数签名，并且提示被格式化为自然代码，并在文档字符串中包含文本描述和测试。该模型需要生成一个符合描述并满足测试用例的Python程序。在表8中，比较了模型与未在代码上进行微调的现有语言模型的pass@1分数，即PaLM和LaMDA（Thoppilan et al.，2022）。PaLM和LLaMA是在包含相似数量代码tokens的数据集上进行训练的。
+
+如表8所示，对于类似数量的参数，LLaMA优于其他通用模型，如LaMDA和PaLM，这些模型没有专门针对代码进行训练或微调。具有13B参数和更多参数的LLaMA在HumanEval和MBPP上都优于LaMDA-137B。LLaMA-65B的性能也优于PaLM-62B，即使训练时间更长。这个 pass@1 该表中报告的结果是通过在0.1℃下取样获得的。这个pass@100 和 pass@80 在温度为0.8时获得度量。论文使用与Chen等人（2021）相同的方法来获得pass@k。
+
+可以通过对特定于代码的tokens进行微调来提高代码的性能。例如，PaLM编码器（Chowdhery等人，2022）增加了pass@1 PaLM在HumanEval上的得分从PaLM的26.2%上升到36%。其他专门针对代码进行预训练的模型在这些任务上的表现也优于一般模型（Chen等人，2021；Nijkamp等人，2022年；Fried等人，2022.）。对代码tokens的微调超出了本文的范围。
+
+#### 5.3.6 大规模多任务语言理解
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p11.png" /> 
+</div><p align=center> 表9：大规模多任务语言理解（MMLU）。5-shot精度。</p>
+
+Hendrycks等人引入的大规模多任务语言理解基准（MMLU）。（2020）由涵盖人文学科、STEM和社会科学等各个知识领域的多项选择题组成。论文使用基准提供的示例，在5-shot设置中评估模型，并在表9中报告结果。在这个基准上，观察到LLaMA-65B在大多数领域中平均落后于Chinchilla70B和PaLM-540B几个百分点。一个潜在的解释是，论文在训练前的数据中使用了有限数量的书籍和学术论文，即ArXiv、Gutenberg和Books3，总计只有177GB，而这些模型是在高达2TB的书籍上训练的。Gopher、Chinchilla和PaLM使用的大量书籍也可以解释为什么Gopher在这个基准上优于GPT-3，而在其他基准上却具有可比性。
+
+#### 5.3.7 训练期间性能的演变
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p12.png" /> 
+</div><p align=center> 图1:7B、13B、33B和65模型的训练tokens的训练损失。LLaMA-33B和LLaMA65B在1.4T tokens上进行训练。较小的模型在1.0T tokens上进行训练。所有模型都使用4M个tokens的批次大小进行训练。</p>
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p13.png" /> 
+</div><p align=center> 图2：训练期间问答和常识推理表现的演变。</p>
+
+在训练过程中，论文跟踪了模型在一些问答和常识基准上的性能，并在图2中进行了报告。在大多数基准测试中，性能稳步提高，并与模型的训练困惑相关（见图1）。SIQA和WinoGrande是例外。最值得注意的是，在SIQA上，观察到性能有很多差异，这可能表明该基准不可靠。在WinoGrande上，表现与训练困惑度并不相关：LLaMA-33B和LLaMA-65B在训练中表现相似。
+
+### 5.4 指令微调
+
+在本节中，展示了对指令数据的短暂微调可以快速改进MMLU。尽管LLaMA-65B的非微调版本已经能够遵循基本指令，但论文观察到，非常少量的微调可以提高MMLU的性能，并进一步提高模型遵循指令的能力。由于这不是本文的重点，论文只进行了一个实验，遵循与Chung等人相同的协议。（2022）来训练指令模型LLaMA-I。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p14.png" /> 
+</div><p align=center> 表10：指令微调–MMLU（5-shot）。在MMLU上进行指令微调和不进行指令微调的中等尺寸模型的比较。</p>
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p15.png" /> 
+</div><p align=center> 表16:MMLU。测试集上每个域的详细5-shot结果。</p>
+
+在表10中，报告了MMLU上的指令模型LLaMA-I的结果，并与现有的中等规模的指令微调模型进行了比较，即OPT-IML（Iyer et al.，2022）和Flan-PaLM系列（Chung et al.，2021）。所有报告的数字都来自相应的论文。尽管这里使用的指令微调方法很简单，但论文在MMLU上达到了68.9%。LLaMA-I（65B）在MMLU上的性能优于现有的中等大小的指令微调模型，但仍远未达到最先进的水平，即MMLU上GPT代码-davinci-002的77.4（数字取自Iyer等人（2022））。MMLU在57个任务上的性能细节可以在附录的表16中找到。
+
+
+### 5.5 偏见、毒性和错误信息
+
+大型语言模型已被证明可以再现和放大训练数据中存在的偏见（Sheng等人，2019；Kurita等人，2019），并生成有毒或攻击性内容（Gehman等人，2020）。由于论文的训练数据集包含很大一部分来自Web的数据，论文认为确定论文的模型生成此类内容的潜力至关重要。为了了解LLaMA-65B的潜在危害，论文在不同的基准上进行了评估，这些基准衡量了有毒成分的产生和刻板印象的检测。虽然我们选择了语言模型社区使用的一些标准基准来表明这些模型的一些问题，但这些评估不足以充分理解与这些模型相关的风险。
+
+
+#### 5.5.1 RealToxicityPrompts
+
+语言模型可以产生有毒的语言，例如侮辱、仇恨言论或威胁。一个模型可以产生非常大范围的毒性内容，这使得彻底的评估具有挑战性。最近的几项工作（Zhang等人，2022；Hoffmann等人，2022）认为真实毒性提示基准（Gehman等人，2020）是他们模型毒性的指标。真实毒性提示由模型必须完成的大约10万个提示组成；通过向PerspectiveAPI 发出请求来自动评估毒性评分。无法控制第三方PerspectiveAPI使用的管道，因此很难与以前的模型进行比较。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p16.png" /> 
+</div><p align=center> 表11：真实毒性提示。在这个基准测试的100k提示上运行贪婪解码器。“尊重”版本是以“以礼貌、尊重和公正的方式完成以下句子：”开头的提示，而“基本”则没有。分数是使用困惑度API获得的，分数越高表示毒性越大。</p>
+
+对于每一个10万个提示，论文都贪婪地用论文的模型生成，并测量它们的毒性评分。每个提示的得分范围从0（无毒）到1（有毒）。在表11中，报告了Real ToxicityPrompts的基本提示和尊重提示类别的平均得分。这些分数与论文在文献中观察到的分数“相当”（例如，Chinchilla的分数为0.087），但这些工作与论文的方法不同（在采样策略、提示次数和API时间方面）。观察到，毒性随着模型的大小而增加，尤其是对于尊重提示。这在之前的工作中也观察到了（Zhang et al.，2022），但Hoffmann et al.（2022）除外，尽管Chinchilla和Gopher的大小不同，但他们没有看到它们之间的区别。这可以解释为，更大的模型Gopher的性能比Chinchilla差，这表明毒性和模型大小之间的关系可能只适用于模型家族。
+
+#### 5.5.2 CrowS-Pairs
+
+论文评估了CrowSPairs模型中的偏差（Nangia等人，2020）。该数据集可以测量9类偏见：性别、宗教、种族/肤色、性取向、年龄、国籍、残疾、外表和社会经济地位。每个例子都由一个刻板印象和一个反刻板印象组成，论文使用两个句子在zero-shot设置下的复杂度来衡量刻板印象句子的模型偏好。因此，分数越高，则表示偏见越大。论文与表12中的GPT-3和OPT-175B进行了比较。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p16.png" /> 
+</div><p align=center>表12：CrowS对。比较了LLaMA-65B与OPT-175B和GPT3-175B中包含的偏差水平。得分越高，表示偏见越大。</p>
+
+LLaMA的平均值与这两种模型相比略为有利。论文的模型在宗教类别上尤其有偏见（与OPT-175B相比增加了10%），其次是年龄和性别。尽管有多个过滤步骤，但论文预计这些偏见会来自CommonCrawl。
+
+#### 5.5.3 WinoGender
+
+为了进一步调查论文的模型对性别类别的偏见，论文查看了WinoGender基准（Rudinger et al.，2018），这是一个共同参考的分辨率数据集。WinoGender是由Winograd模式构成的，通过确定模型共同参考解决性能是否受到代词性别的影响来评估偏见。
+
+更确切地说，每个句子有三个提及：“职业”、“参与者”和“代词”，其中代词共同指代职业或参与者。论文提示模型确定共指关系，并根据句子的上下文来衡量它是否正确。其目的是揭示与职业相关的社会偏见是否已被该模型所捕捉。例如，WinoGender数据集中的一句话是“护士通知患者他的轮班将在一小时后结束。论文评估了使用三个代词时的表现：“她/她/她”、“他/他/他”和“他们/他们/某人”（与代词的语法功能相对应的不同选择）。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p17.png" /> 
+</div><p align=center>表13：Wino性别。LLaMA模型对不同代词（“她/她/她”和“他/他/他”）的共同参考解析准确性。观察到，论文的模型在“他们/他们/某人”代词上的表现比在“她/她”和“他/他/他”上的表现更好，这可能表明存在偏见。</p>
+
+在表13中，报告了数据集中包含的三种不同代词的共同参考分数。观察到，与“她/她/她”和“他/他/他”代词相比，论文的模型在对“他们/他们/某人”代词执行共同参考解析方面明显更好。在之前的工作中也进行了类似的观察（Rae等人，2021；Hoffmann等人，2022年），这可能表明存在性别偏见。事实上，在“她/她/她”和“他/他/他”代词的情况下，模型可能使用职业的多数性别来执行共同参考解决，而不是使用句子的证据。
+
+为了进一步研究这一假设，查看了WinoGender数据集中“她/她”和“他/他/他”代词的“gotcha”格集。这些情况对应于代词与职业的大多数性别不匹配的句子，而职业是正确的答案。在表13中，观察到我们的模型LLaMA-65B在gotcha例子中犯了更多的错误，清楚地表明它捕捉到了与性别和职业相关的社会偏见。“她/她/她”和“他/他/他”代词的表现有所下降，这表明无论性别如何，都存在偏见。
+
+#### 5.5.4 TruthfulQA
+
+TruthfulQA（Lin等人，2021）旨在衡量模型的真实性，即其识别声明真实性的能力。Lin等人（2021）考虑了“真实”的定义，即“真实世界的文字真相”，而不是仅在信仰体系或传统背景下才是真实的主张。该基准可以评估模型产生错误信息或虚假声明的风险。这些问题以不同的风格写成，涵盖38个类别，并被设计成对抗性的。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-4/p18.png" /> 
+</div><p align=center>表14：真实质量保证。报告了经过专门训练的模型通过OpenAI API评分的真实和真实*信息性答案的分数。遵循Ouyang等人使用的QA提示风格。（2022），并从同一篇论文中报告了GPT-3的性能。</p>
+
+在表14中，报告了论文的模型在两个问题上的性能，以衡量真实模型以及真实和信息的交叉点。与GPT-3相比，论文的模型在这两个类别中的得分都更高，但正确答案的比率仍然很低，**这表明论文的模型很可能会产生错误答案的幻觉。**
+
+### 5.6 碳足迹
+
+论文模型的训练消耗了大量的能量，导致了二氧化碳的排放。遵循了最近关于这一主题的文献，并在表15中对总能源消耗和由此产生的碳足迹进行了细分。论文遵循Wu等人的公式。（2022）估计训练模型所需的瓦时Wh，以及碳排放吨tCO2eq。对于Wh，使用以下公式：
+
+`Wh = GPU-h×(GPU power consumption)×PUE`
+
+其中将功率使用效率（PUE）设置为1.1。由此产生的碳排放取决于用于训练网络的数据中心的位置。例如，BLOOM使用的网格排放0.057千克二氧化碳当量/千瓦时，导致27吨二氧化碳当量，OPT使用的网格释放0.231千克二氧化碳当量/KWh，导致82吨二氧化碳当量。在这项研究中，论文有兴趣比较在同一数据中心训练这些模型的碳排放成本。因此，论文没有考虑数据中心的位置，而是使用0.385 kg CO2eq/KWh的美国全国平均碳强度因子。这导致了以下碳排放量的公式：
+
+`tCO2eq = MWh × 0.385`
+
+为了进行公平的比较，将相同的公式应用于OPT和BLOOM。对于OPT，假设992 A100-80B需要34天的训练（见他们的日志4）。最后，论文估计在大约5个月的时间里，使用了2048个A100-80GB来开发我们的模型。这意味着，在论文的假设下，开发这些模型的成本约为2638兆瓦时，总排放量为1015吨二氧化碳当量。论文希望发布这些模型将有助于减少未来的碳排放，因为训练已经完成，而且其中一些模型相对较小，可以在单个GPU上运行。
+
+!> 关于LLaMA-65B的生成的一些实例参见paper
+
+### 5.7 高效微调技术QLoRA实战，基于LLaMA-65B微调仅需48G显存，真香
+
+!> 感谢吃果冻不吐果冻皮 大佬
+
+<!-- https://mp.weixin.qq.com/s/b4OixyHEvL_YfOJZukC2Ig -->
+
+<!-- https://zhuanlan.zhihu.com/p/619426866 -->
+
+1. 环境搭建
+
+基础环境配置如下：
+
++ 操作系统: CentOS 7
++ CPUs: 单个节点具有 1TB 内存的 Intel CPU，物理CPU个数为64，每颗CPU核数为16
++ GPUs: 8 卡 A800 80GB GPUs
++ Python: 3.10 (需要先升级OpenSSL到1.1.1t版本（点击下载OpenSSL），然后再编译安装Python)，点击下载Python
++ NVIDIA驱动程序版本: 515.65.01，根据不同型号选择不同的驱动程序，点击下载。
++ CUDA工具包: 11.7，点击下载
++ NCCL: nccl_2.14.3-1+cuda11.7，点击下载
++ cuDNN: 8.8.1.3_cuda11，点击下载
+
+上面的NVIDIA驱动、CUDA、Python等工具的安装就不一一赘述了。
+
+创建虚拟环境并激活虚拟环境（qlora-venv-py310-cu117）：
+
+```
+cd /home/guodong.li/virtual-venv 
+virtualenv -p /usr/bin/python3.10 qlora-venv-py310-cu117 
+source /home/guodong.li/virtual-venv/qlora-venv-py310-cu117/bin/activate
+```
+
+安装transformers、accelerate、peft库。
+
+```
+git clone https://github.com/huggingface/transformers.git
+cd transformers
+git checkout 8f093fb
+pip install .
+
+git clone https://github.com/huggingface/accelerate.git
+cd accelerate/
+git checkout 665d518
+pip install .
+
+git clone https://github.com/huggingface/peft.git
+cd peft/
+git checkout 189a6b8
+pip install .
+```
+
+安装其他依赖库：
+
+```
+pip install -r requirements.txt
+```
+
+其中，requirements.txt内容如下：
+
+```
+bitsandbytes==0.39.0
+einops==0.6.1
+evaluate==0.4.0
+scikit-learn==1.2.2
+sentencepiece==0.1.99
+tensorboardX
+```
+
+2. 数据集准备
+
+数据集直接使用alpaca-lora项目提供的`alpaca_data.json`、`alpaca_data_cleaned_archive.json`或`alpaca_data_gpt4.json`即可。
+
+3. 模型权重格式转换
+
+首先，对原始的 LLaMA 30B/65B 大模型进行模型权重格式转换为Huggingface Transformers格式。模型转换的具体步骤请参考之前的文章：[从0到1复现斯坦福羊驼（Stanford Alpaca 7B）](https://mp.weixin.qq.com/s/I4h3WXGwqEPVKbgy-BmpoA)。
+
+本文会使用到 LLaMA 7B 和 65B 模型，需预先转换好。
+
+4. 模型微调
+
+```
+git clone https://github.com/artidoro/qlora.git
+cd qlora
+git checkout cc48811
+
+python qlora.py \
+--dataset "/data/nfs/guodong.li/data/alpaca_data_cleaned.json" \
+--model_name_or_path "/data/nfs/guodong.li/pretrain/hf-llama-model/llama-7b" \
+--output_dir "/home/guodong.li/output/llama-7b-qlora" \
+--per_device_train_batch_size 1 \
+--max_steps 1000 \
+--save_total_limit 2
+```
+
+模型情况下，会将模型的不同层放置在不同层已进行模型并行。
+
+模型训练过程：
+
+```
+python qlora.py \
+> --dataset "/data/nfs/guodong.li/data/alpaca_data_cleaned.json" \
+> --model_name_or_path "/data/nfs/guodong.li/pretrain/hf-llama-model/llama-7b"  \
+> --output_dir "/home/guodong.li/output/llama-7b-qlora"  \
+> --per_device_train_batch_size 1 \
+> --max_steps 1000 \
+> --save_total_limit 2
+
+===================================BUG REPORT===================================
+Welcome to bitsandbytes. For bug reports, please run
+
+python -m bitsandbytes
+
+ and submit this information together with your error trace to: https://github.com/TimDettmers/bitsandbytes/issues
+================================================================================
+bin /home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/libbitsandbytes_cuda117.so
+/home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/cuda_setup/main.py:149: UserWarning: WARNING: The following directories listed in your path were found to be non-existent: {PosixPath('/opt/rh/devtoolset-9/root/usr/lib/dyninst'), PosixPath('/opt/rh/devtoolset-7/root/usr/lib/dyninst')}
+  warn(msg)
+CUDA SETUP: CUDA runtime path found: /usr/local/cuda-11.7/lib64/libcudart.so.11.0
+CUDA SETUP: Highest compute capability among GPUs detected: 8.0
+CUDA SETUP: Detected CUDA version 117
+CUDA SETUP: Loading binary /home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/libbitsandbytes_cuda117.so...
+Found a previous checkpoint at: /home/guodong.li/output/llama-7b-qlora/checkpoint-250
+loading base model /data/nfs/guodong.li/pretrain/hf-llama-model/llama-7b...
+The model weights are not tied. Please use the `tie_weights` method before using the `infer_auto_device` function.
+Loading checkpoint shards: 100%|███████████████████████████████████████████████████████████████████| 33/33 [00:17<00:00,  1.93it/s]
+Loading adapters from checkpoint.
+trainable params: 79953920.0 || all params: 3660320768 || trainable: 2.184341894267557
+loaded model
+Adding special tokens.
+Found cached dataset json (/home/guodong.li/.cache/huggingface/datasets/json/default-3c2be6958ca766f9/0.0.0)
+Loading cached split indices for dataset at /home/guodong.li/.cache/huggingface/datasets/json/default-3c2be6958ca766f9/0.0.0/cache-d071c407d9bc0de0.arrow and /home/guodong.li/.cache/huggingface/datasets/json/default-3c2be6958ca766f9/0.0.0/cache-e736a74b2c29e789.arrow
+Loading cached processed dataset at /home/guodong.li/.cache/huggingface/datasets/json/default-3c2be6958ca766f9/0.0.0/cache-01d50099f3f094d7.arrow
+torch.float32 422326272 0.11537932153507864
+torch.uint8 3238002688 0.8846206784649213
+{'loss': 1.4282, 'learning_rate': 0.0002, 'epoch': 0.0}
+{'loss': 1.469, 'learning_rate': 0.0002, 'epoch': 0.01}
+...
+{'loss': 1.4002, 'learning_rate': 0.0002, 'epoch': 0.08}
+{'loss': 1.4261, 'learning_rate': 0.0002, 'epoch': 0.08}
+{'loss': 2.4323, 'learning_rate': 0.0002, 'epoch': 0.09}
+ 25%|██████████████████████▎                                                                  | 250/1000 [25:34<1:10:31,  5.64s/it]Saving PEFT checkpoint...
+{'loss': 1.6007, 'learning_rate': 0.0002, 'epoch': 0.09}
+{'loss': 1.6187, 'learning_rate': 0.0002, 'epoch': 0.09}
+...
+{'loss': 1.6242, 'learning_rate': 0.0002, 'epoch': 0.16}
+{'loss': 1.6073, 'learning_rate': 0.0002, 'epoch': 0.16}
+{'loss': 1.6825, 'learning_rate': 0.0002, 'epoch': 0.17}
+{'loss': 2.6283, 'learning_rate': 0.0002, 'epoch': 0.17}
+ 50%|█████████████████████████████████████████████▌                                             | 500/1000 [50:44<49:21,  5.92s/it]Saving PEFT checkpoint...
+{'loss': 1.619, 'learning_rate': 0.0002, 'epoch': 0.17}
+{'loss': 1.5394, 'learning_rate': 0.0002, 'epoch': 0.18}
+...
+{'loss': 1.5247, 'learning_rate': 0.0002, 'epoch': 0.25}
+{'loss': 1.6054, 'learning_rate': 0.0002, 'epoch': 0.25}
+{'loss': 2.3289, 'learning_rate': 0.0002, 'epoch': 0.26}
+ 75%|██████████████████████████████████████████████████████████████████▊                      | 750/1000 [1:15:27<23:37,  5.67s/it]Saving PEFT checkpoint...
+{'loss': 1.6001, 'learning_rate': 0.0002, 'epoch': 0.26}
+...
+{'loss': 1.6287, 'learning_rate': 0.0002, 'epoch': 0.34}
+{'loss': 2.3511, 'learning_rate': 0.0002, 'epoch': 0.34}
+100%|████████████████████████████████████████████████████████████████████████████████████████| 1000/1000 [1:42:08<00:00,  7.34s/it]Saving PEFT checkpoint...
+{'train_runtime': 6132.3668, 'train_samples_per_second': 2.609, 'train_steps_per_second': 0.163, 'train_loss': 1.7447978076934814, 'epoch': 0.34}
+100%|████████████████████████████████████████████████████████████████████████████████████████| 1000/1000 [1:42:12<00:00,  6.13s/it]
+Saving PEFT checkpoint...
+***** train metrics *****
+  epoch                    =       0.34
+  train_loss               =     1.7448
+  train_runtime            = 1:42:12.36
+  train_samples_per_second =      2.609
+  train_steps_per_second   =      0.163
+```
+
+模型输出权重文件：
+
+```
+tree -h llama-7b-qlora
+llama-7b-qlora
+├── [ 167]  all_results.json
+├── [ 316]  checkpoint-1000
+│   ├── [ 528]  adapter_config.json
+│   ├── [  75]  adapter_model
+│   │   ├── [ 528]  adapter_config.json
+│   │   ├── [610M]  adapter_model.bin
+│   │   └── [  27]  README.md
+│   ├── [610M]  adapter_model.bin
+│   ├── [  21]  added_tokens.json
+│   ├── [3.1G]  optimizer.pt
+│   ├── [  27]  README.md
+│   ├── [ 14K]  rng_state.pth
+│   ├── [ 627]  scheduler.pt
+│   ├── [  96]  special_tokens_map.json
+│   ├── [ 742]  tokenizer_config.json
+│   ├── [488K]  tokenizer.model
+│   ├── [ 11K]  trainer_state.json
+│   └── [5.6K]  training_args.bin
+├── [ 316]  checkpoint-750
+│   ├── [ 528]  adapter_config.json
+│   ├── [  75]  adapter_model
+│   │   ├── [ 528]  adapter_config.json
+│   │   ├── [610M]  adapter_model.bin
+│   │   └── [  27]  README.md
+│   ├── [610M]  adapter_model.bin
+│   ├── [  21]  added_tokens.json
+│   ├── [3.1G]  optimizer.pt
+│   ├── [  27]  README.md
+│   ├── [ 14K]  rng_state.pth
+│   ├── [ 627]  scheduler.pt
+│   ├── [  96]  special_tokens_map.json
+│   ├── [ 742]  tokenizer_config.json
+│   ├── [488K]  tokenizer.model
+│   ├── [8.0K]  trainer_state.json
+│   └── [5.6K]  training_args.bin
+├── [   0]  completed
+├── [ 199]  metrics.json
+├── [ 11K]  trainer_state.json
+└── [ 167]  train_results.json
+
+4 directories, 35 files
+```
+
+显存占用：
+
+```
+> nvidia-smi
+Sun Jun 11 19:32:39 2023
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 515.105.01   Driver Version: 515.105.01   CUDA Version: 11.7     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|                               |                      |               MIG M. |
+|===============================+======================+======================|
+|   0  NVIDIA A800 80G...  Off  | 00000000:34:00.0 Off |                    0 |
+| N/A   40C    P0    66W / 300W |   3539MiB / 81920MiB |      0%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   1  NVIDIA A800 80G...  Off  | 00000000:35:00.0 Off |                    0 |
+| N/A   54C    P0    77W / 300W |   3077MiB / 81920MiB |     24%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   2  NVIDIA A800 80G...  Off  | 00000000:36:00.0 Off |                    0 |
+| N/A   55C    P0    75W / 300W |   3077MiB / 81920MiB |      8%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   3  NVIDIA A800 80G...  Off  | 00000000:37:00.0 Off |                    0 |
+| N/A   57C    P0    81W / 300W |   3077MiB / 81920MiB |     14%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   4  NVIDIA A800 80G...  Off  | 00000000:9B:00.0 Off |                    0 |
+| N/A   60C    P0    83W / 300W |   3077MiB / 81920MiB |      8%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   5  NVIDIA A800 80G...  Off  | 00000000:9C:00.0 Off |                    0 |
+| N/A   61C    P0   228W / 300W |   3077MiB / 81920MiB |     25%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   6  NVIDIA A800 80G...  Off  | 00000000:9D:00.0 Off |                    0 |
+| N/A   53C    P0   265W / 300W |   3077MiB / 81920MiB |      6%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+|   7  NVIDIA A800 80G...  Off  | 00000000:9E:00.0 Off |                    0 |
+| N/A   46C    P0    78W / 300W |   6891MiB / 81920MiB |     12%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    0   N/A  N/A     37939      C   python                           2513MiB |
+|    1   N/A  N/A     37939      C   python                           2819MiB |
+|    2   N/A  N/A     37939      C   python                           2819MiB |
+|    3   N/A  N/A     37939      C   python                           2819MiB |
+|    4   N/A  N/A     37939      C   python                           2819MiB |
+|    5   N/A  N/A     37939      C   python                           2819MiB |
+|    6   N/A  N/A     37939      C   python                           2819MiB |
+|    7   N/A  N/A     37939      C   python                           3561MiB |
++-----------------------------------------------------------------------------+
+```
+
+
+5. 模型权重合并
+
+新增模型权重合并文件（export_hf_checkpoint.py），将lora权重合并回原始权重。
+
+```python
+import os
+
+import torch
+import transformers
+from peft import PeftModel
+from transformers import LlamaForCausalLM, LlamaTokenizer  # noqa: F402
+
+BASE_MODEL = os.environ.get("BASE_MODEL", None)
+LORA_MODEL = os.environ.get("LORA_MODEL", "tloen/alpaca-lora-7b")
+HF_CHECKPOINT = os.environ.get("HF_CHECKPOINT", "./hf_ckpt")
+
+
+
+assert (
+    BASE_MODEL
+), "Please specify a value for BASE_MODEL environment variable, e.g. `export BASE_MODEL=decapoda-research/llama-7b-hf`"  # noqa: E501
+
+tokenizer = LlamaTokenizer.from_pretrained(BASE_MODEL)
+
+base_model = LlamaForCausalLM.from_pretrained(
+    BASE_MODEL,
+    #load_in_8bit=False,
+    torch_dtype=torch.bfloat16,
+    device_map={"": "cpu"},
+)
+
+first_weight = base_model.model.layers[0].self_attn.q_proj.weight
+first_weight_old = first_weight.clone()
+
+lora_model = PeftModel.from_pretrained(
+    base_model,
+    # TODO
+    # "tloen/alpaca-lora-7b",
+    LORA_MODEL,
+    #device_map={"": "cpu"},
+    #torch_dtype=torch.float16,
+)
+
+lora_weight = lora_model.base_model.model.model.layers[
+    0
+].self_attn.q_proj.weight
+
+assert torch.allclose(first_weight_old, first_weight)
+
+# merge weights
+for layer in lora_model.base_model.model.model.layers:
+    layer.self_attn.q_proj.merge_weights = True
+    layer.self_attn.v_proj.merge_weights = True
+
+lora_model.train(False)
+
+# did we do anything?
+#assert not torch.allclose(first_weight_old, first_weight)
+
+lora_model_sd = lora_model.state_dict()
+deloreanized_sd = {
+    k.replace("base_model.model.", ""): v
+    for k, v in lora_model_sd.items()
+    if "lora" not in k
+}
+
+LlamaForCausalLM.save_pretrained(
+    base_model, HF_CHECKPOINT , state_dict=deloreanized_sd, max_shard_size="400MB"
+)
+
+```
+
+接下来，就可以使用合并后的权重文件进行模型推理了。
+
+6. 模型推理
+
+新增推理代码（`inference.py`）：
+
+```python
+from transformers import AutoModelForCausalLM, LlamaTokenizer
+import torch
+
+model_id = "/data/nfs/guodong.li/pretrain/hf-llama-model/llama-7b"
+merge_model_id = "/home/guodong.li/output/llama-7b-merge"
+
+#model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True)
+model = AutoModelForCausalLM.from_pretrained(merge_model_id, load_in_4bit=True, device_map="auto")
+
+tokenizer = LlamaTokenizer.from_pretrained(model_id)
+
+#print(model)
+
+device = torch.device("cuda:0")
+
+#model = model.to(device)
+
+text = "Hello, my name is "
+inputs = tokenizer(text, return_tensors="pt").to(device)
+outputs = model.generate(**inputs, max_new_tokens=20, do_sample=True, top_k=30, top_p=0.85)
+print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+
+print("\n------------------------------------------------\nInput: ")
+
+line = input()
+while line:
+  inputs = tokenizer(line, return_tensors="pt").to(device)
+  outputs = model.generate(**inputs, max_new_tokens=20, do_sample=True, top_k=30, top_p=0.85)
+  print("Output: ",tokenizer.decode(outputs[0], skip_special_tokens=True))
+  print("\n------------------------------------------------\nInput: ")
+  line = input()
+
+```
+
+运行过程：
+
+
+```
+> CUDA_VISIBLE_DEVICES=1  python inference.py
+
+===================================BUG REPORT===================================
+Welcome to bitsandbytes. For bug reports, please run
+
+python -m bitsandbytes
+
+ and submit this information together with your error trace to: https://github.com/TimDettmers/bitsandbytes/issues
+================================================================================
+bin /home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/libbitsandbytes_cuda117.so
+/home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/cuda_setup/main.py:149: UserWarning: WARNING: The following directories listed in your path were found to be non-existent: {PosixPath('/opt/rh/devtoolset-9/root/usr/lib/dyninst'), PosixPath('/opt/rh/devtoolset-7/root/usr/lib/dyninst')}
+  warn(msg)
+CUDA SETUP: CUDA runtime path found: /usr/local/cuda-11.7/lib64/libcudart.so
+CUDA SETUP: Highest compute capability among GPUs detected: 8.0
+CUDA SETUP: Detected CUDA version 117
+CUDA SETUP: Loading binary /home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/libbitsandbytes_cuda117.so...
+The model weights are not tied. Please use the `tie_weights` method before using the `infer_auto_device` function.
+Loading checkpoint shards: 100%|███████████████████████████████████████████████████████████████████| 39/39 [00:07<00:00,  5.02it/s]
+Hello, my name is 23 and i have been doing this for the last 6 months. I have been a great
+
+------------------------------------------------
+Input:
+Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\nGive three tips for staying healthy.\n\n### Input:\n\n\n### Response:
+Output:  Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\nGive three tips for staying healthy.\n\n### Input:\n\n\n### Response: 1. Eat healthy food.\n2. Stay active.\n3. Eat
+
+------------------------------------------------
+Input:
+
+```
+
+显存占用：
+
+```
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    1   N/A  N/A     21373      C   python                           5899MiB |
++-----------------------------------------------------------------------------+
+
+```
+
+除此之外，还可以不进行合并权重，直接进行推理，具体如下所示。
+
+新增推理代码（inference_qlora.py）：
+
+```python
+
+from transformers import AutoModelForCausalLM, LlamaTokenizer
+import torch
+from peft import PeftModel
+
+model_id = "/data/nfs/guodong.li/pretrain/hf-llama-model/llama-7b"
+lora_weights = "/home/guodong.li/output/llama-7b-qlora/checkpoint-1000/adapter_model"
+
+#model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True)
+model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True, device_map="auto")
+model = PeftModel.from_pretrained(
+    model,
+    lora_weights,
+)
+
+
+
+tokenizer = LlamaTokenizer.from_pretrained(model_id)
+
+#print(model)
+
+device = torch.device("cuda:0")
+
+#model = model.to(device)
+
+text = "Hello, my name is "
+inputs = tokenizer(text, return_tensors="pt").to(device)
+outputs = model.generate(**inputs, max_new_tokens=20, do_sample=True, top_k=30, top_p=0.85)
+print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+
+print("\n------------------------------------------------\nInput: ")
+
+line = input()
+while line:
+  inputs = tokenizer(line, return_tensors="pt").to(device)
+  outputs = model.generate(**inputs, max_new_tokens=20, do_sample=True, top_k=30, top_p=0.85)
+  print("Output: ",tokenizer.decode(outputs[0], skip_special_tokens=True))
+  print("\n------------------------------------------------\nInput: ")
+  line = input()
+```
+
+显存占用：
+
+```
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    1   N/A  N/A     10500      C   python                           7073MiB |
++-----------------------------------------------------------------------------+
+
+
+```
+可以看到，此时模型推理的显存占用会高于合并之后进行模型推理。
+
+当然，将lora权重合并会base模型权重还可以通过merge_and_unload()方法，如下所示：
+
+```python
+model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, device_map="auto")
+model = PeftModel.from_pretrained(
+    model,
+    lora_weights,
+)
+model = model.merge_and_unload()
+```
+
+前面仅对7B模型进行了尝试，而 LLaMA-65B 模型对于显存的占用效果如何呢，是否如官方所说仅需48G显存足矣了呢？带着疑问，接下来我们使用QLoRA对LLaMA-65B进行微调。
+
+
+!> 微调LLaMA-65B大模型
+
+模型训练过程：
+
+```
+CUDA_VISIBLE_DEVICES=0 python qlora.py \
+>     --model_name_or_path /data/nfs/guodong.li/pretrain/hf-llama-model/llama-65b \
+>     --dataset /data/nfs/guodong.li/data/alpaca_data_cleaned.json \
+>     --output_dir /home/guodong.li/output/llama-65b-qlora \
+>     --logging_steps 10 \
+>     --save_strategy steps \
+>     --data_seed 42 \
+>     --save_steps 100 \
+>     --save_total_limit 2 \
+>     --evaluation_strategy steps \
+>     --eval_dataset_size 128 \
+>     --max_eval_samples 200 \
+>     --per_device_eval_batch_size 1 \
+>     --max_new_tokens 32 \
+>     --dataloader_num_workers 3 \
+>     --group_by_length \
+>     --logging_strategy steps \
+>     --remove_unused_columns False \
+>     --do_train \
+>     --do_eval \
+>     --do_mmlu_eval \
+>     --lora_r 64 \
+>     --lora_alpha 16 \
+>     --lora_modules all \
+>     --double_quant \
+>     --quant_type nf4 \
+>     --bf16 \
+>     --bits 4 \
+>     --warmup_ratio 0.03 \
+>     --lr_scheduler_type constant \
+>     --gradient_checkpointing \
+>     --source_max_len 16 \
+>     --target_max_len 512 \
+>     --per_device_train_batch_size 1 \
+>     --gradient_accumulation_steps 16 \
+>     --max_steps 200 \
+>     --eval_steps 50 \
+>     --learning_rate 0.0001 \
+>     --adam_beta2 0.999 \
+>     --max_grad_norm 0.3 \
+>     --lora_dropout 0.05 \
+>     --weight_decay 0.0 \
+>     --seed 0 \
+>     --report_to tensorboard
+
+===================================BUG REPORT===================================
+Welcome to bitsandbytes. For bug reports, please run
+
+python -m bitsandbytes
+
+ and submit this information together with your error trace to: https://github.com/TimDettmers/bitsandbytes/issues
+================================================================================
+bin /home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/libbitsandbytes_cuda117.so
+/home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/cuda_setup/main.py:149: UserWarning: WARNING: The following directories listed in your path were found to be non-existent: {PosixPath('/opt/rh/devtoolset-7/root/usr/lib/dyninst'), PosixPath('/opt/rh/devtoolset-9/root/usr/lib/dyninst')}
+  warn(msg)
+CUDA SETUP: CUDA runtime path found: /usr/local/cuda-11.7/lib64/libcudart.so
+CUDA SETUP: Highest compute capability among GPUs detected: 8.0
+CUDA SETUP: Detected CUDA version 117
+CUDA SETUP: Loading binary /home/guodong.li/virtual-venv/qlora-venv-py310-cu117/lib/python3.10/site-packages/bitsandbytes/libbitsandbytes_cuda117.so...
+loading base model /data/nfs/guodong.li/pretrain/hf-llama-model/llama-65b...
+The model weights are not tied. Please use the `tie_weights` method before using the `infer_auto_device` function.
+Loading checkpoint shards: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 81/81 [01:33<00:00,  1.16s/it]
+adding LoRA modules...
+trainable params: 399769600.0 || all params: 33705172992 || trainable: 1.1860778762206212
+loaded model
+Adding special tokens.
+Found cached dataset json (/home/guodong.li/.cache/huggingface/datasets/json/default-3c2be6958ca766f9/0.0.0)
+Loading cached split indices for dataset at /home/guodong.li/.cache/huggingface/datasets/json/default-3c2be6958ca766f9/0.0.0/cache-298a54784863252c.arrow and /home/guodong.li/.cache/huggingface/datasets/json/default-3c2be6958ca766f9/0.0.0/cache-e827ad98bd5ab470.arrow
+Splitting train dataset in train and validation according to `eval_dataset_size`
+Found cached dataset json (/home/guodong.li/.cache/huggingface/datasets/json/default-a08e5825b0ce557e/0.0.0/e347ab1c932092252e717ff3f949105a4dd28b27e842dd53157d2f72e276c2e4)
+100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 2/2 [00:00<00:00, 704.21it/s]
+torch.bfloat16 1323843584 0.039277144217520744
+torch.uint8 32380026880 0.9606837249535352
+torch.float32 1318912 3.913082894407767e-05
+{'loss': 1.5995, 'learning_rate': 0.0001, 'epoch': 0.0}
+{'loss': 1.6043, 'learning_rate': 0.0001, 'epoch': 0.01}
+{'loss': 1.7943, 'learning_rate': 0.0001, 'epoch': 0.01}
+{'loss': 1.9854, 'learning_rate': 0.0001, 'epoch': 0.01}
+{'loss': 2.5809, 'learning_rate': 0.0001, 'epoch': 0.02}
+{'eval_loss': 2.077033519744873, 'eval_runtime': 101.312, 'eval_samples_per_second': 1.263, 'eval_steps_per_second': 1.263, 'epoch': 0.02}
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1531/1531 [38:19<00:00,  1.50s/it]
+{'mmlu_loss': 0.5965077246348893, 'mmlu_eval_accuracy_professional_accounting': 0.5483870967741935, 'mmlu_eval_accuracy_business_ethics': 0.7272727272727273, 'mmlu_eval_accuracy_international_law': 0.8461538461538461, 'mmlu_eval_accuracy_high_school_world_history': 0.6538461538461539, 'mmlu_eval_accuracy_college_physics': 0.45454545454545453, 'mmlu_eval_accuracy_public_relations': 0.6666666666666666, 'mmlu_eval_accuracy_management': 0.7272727272727273, 'mmlu_eval_accuracy_marketing': 0.88, 'mmlu_eval_accuracy_high_school_microeconomics': 0.5, 'mmlu_eval_accuracy_anatomy': 0.5714285714285714, 'mmlu_eval_accuracy_high_school_european_history': 0.7777777777777778, 'mmlu_eval_accuracy_high_school_government_and_politics': 0.7619047619047619, 'mmlu_eval_accuracy_college_mathematics': 0.2727272727272727, 'mmlu_eval_accuracy_logical_fallacies': 0.7222222222222222, 'mmlu_eval_accuracy_high_school_computer_science': 0.5555555555555556, 'mmlu_eval_accuracy_high_school_us_history': 0.7727272727272727, 'mmlu_eval_accuracy_high_school_biology': 0.625, 'mmlu_eval_accuracy_formal_logic': 0.2857142857142857, 'mmlu_eval_accuracy_computer_security': 0.5454545454545454, 'mmlu_eval_accuracy_security_studies': 0.5185185185185185, 'mmlu_eval_accuracy_human_sexuality': 0.5833333333333334, 'mmlu_eval_accuracy_astronomy': 0.5625, 'mmlu_eval_accuracy_elementary_mathematics': 0.34146341463414637, 'mmlu_eval_accuracy_machine_learning': 0.45454545454545453, 'mmlu_eval_accuracy_moral_scenarios': 0.49, 'mmlu_eval_accuracy_college_chemistry': 0.125, 'mmlu_eval_accuracy_sociology': 0.7727272727272727, 'mmlu_eval_accuracy_high_school_statistics': 0.2608695652173913, 'mmlu_eval_accuracy_high_school_chemistry': 0.3181818181818182, 'mmlu_eval_accuracy_philosophy': 0.7647058823529411, 'mmlu_eval_accuracy_virology': 0.5555555555555556, 'mmlu_eval_accuracy_electrical_engineering': 0.3125, 'mmlu_eval_accuracy_prehistory': 0.6, 'mmlu_eval_accuracy_high_school_mathematics': 0.20689655172413793, 'mmlu_eval_accuracy_professional_law': 0.4176470588235294, 'mmlu_eval_accuracy_high_school_macroeconomics': 0.6046511627906976, 'mmlu_eval_accuracy_world_religions': 0.8421052631578947, 'mmlu_eval_accuracy_college_biology': 0.625, 'mmlu_eval_accuracy_college_computer_science': 0.36363636363636365, 'mmlu_eval_accuracy_college_medicine': 0.36363636363636365, 'mmlu_eval_accuracy_miscellaneous': 0.7093023255813954, 'mmlu_eval_accuracy_professional_medicine': 0.5483870967741935, 'mmlu_eval_accuracy_nutrition': 0.5757575757575758, 'mmlu_eval_accuracy_jurisprudence': 0.5454545454545454, 'mmlu_eval_accuracy_us_foreign_policy': 0.9090909090909091, 'mmlu_eval_accuracy_global_facts': 0.4, 'mmlu_eval_accuracy_medical_genetics': 0.9090909090909091, 'mmlu_eval_accuracy_moral_disputes': 0.5526315789473685, 'mmlu_eval_accuracy_abstract_algebra': 0.18181818181818182, 'mmlu_eval_accuracy_conceptual_physics': 0.38461538461538464, 'mmlu_eval_accuracy_econometrics': 0.5, 'mmlu_eval_accuracy_human_aging': 0.7391304347826086, 'mmlu_eval_accuracy_professional_psychology': 0.5217391304347826, 'mmlu_eval_accuracy_high_school_physics': 0.23529411764705882, 'mmlu_eval_accuracy_clinical_knowledge': 0.4482758620689655, 'mmlu_eval_accuracy_high_school_geography': 0.7727272727272727, 'mmlu_eval_accuracy_high_school_psychology': 0.85, 'mmlu_eval_accuracy': 0.5572183480994843, 'epoch': 0.02}
+{'loss': 1.6049, 'learning_rate': 0.0001, 'epoch': 0.02}
+{'loss': 1.5043, 'learning_rate': 0.0001, 'epoch': 0.02}
+{'loss': 1.5604, 'learning_rate': 0.0001, 'epoch': 0.03}
+{'loss': 1.6828, 'learning_rate': 0.0001, 'epoch': 0.03}
+{'loss': 2.3214, 'learning_rate': 0.0001, 'epoch': 0.03}
+{'eval_loss': 1.8286590576171875, 'eval_runtime': 157.8957, 'eval_samples_per_second': 0.811, 'eval_steps_per_second': 0.811, 'epoch': 0.03}
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1531/1531 [39:05<00:00,  1.53s/it]
+{'mmlu_loss': 0.6160509743618856, 'mmlu_eval_accuracy_professional_accounting': 0.4838709677419355, 'mmlu_eval_accuracy_business_ethics': 0.7272727272727273, 'mmlu_eval_accuracy_international_law': 0.8461538461538461, 'mmlu_eval_accuracy_high_school_world_history': 0.7307692307692307, 'mmlu_eval_accuracy_college_physics': 0.45454545454545453, 'mmlu_eval_accuracy_public_relations': 0.5833333333333334, 'mmlu_eval_accuracy_management': 0.7272727272727273, 'mmlu_eval_accuracy_marketing': 0.84, 'mmlu_eval_accuracy_high_school_microeconomics': 0.5384615384615384, 'mmlu_eval_accuracy_anatomy': 0.5714285714285714, 'mmlu_eval_accuracy_high_school_european_history': 0.8333333333333334, 'mmlu_eval_accuracy_high_school_government_and_politics': 0.8095238095238095, 'mmlu_eval_accuracy_college_mathematics': 0.36363636363636365, 'mmlu_eval_accuracy_logical_fallacies': 0.7222222222222222, 'mmlu_eval_accuracy_high_school_computer_science': 0.5555555555555556, 'mmlu_eval_accuracy_high_school_us_history': 0.7727272727272727, 'mmlu_eval_accuracy_high_school_biology': 0.46875, 'mmlu_eval_accuracy_formal_logic': 0.2857142857142857, 'mmlu_eval_accuracy_computer_security': 0.45454545454545453, 'mmlu_eval_accuracy_security_studies': 0.5555555555555556, 'mmlu_eval_accuracy_human_sexuality': 0.5, 'mmlu_eval_accuracy_astronomy': 0.6875, 'mmlu_eval_accuracy_elementary_mathematics': 0.43902439024390244, 'mmlu_eval_accuracy_machine_learning': 0.5454545454545454, 'mmlu_eval_accuracy_moral_scenarios': 0.4, 'mmlu_eval_accuracy_college_chemistry': 0.0, 'mmlu_eval_accuracy_sociology': 0.8181818181818182, 'mmlu_eval_accuracy_high_school_statistics': 0.2608695652173913, 'mmlu_eval_accuracy_high_school_chemistry': 0.2727272727272727, 'mmlu_eval_accuracy_philosophy': 0.8235294117647058, 'mmlu_eval_accuracy_virology': 0.5555555555555556, 'mmlu_eval_accuracy_electrical_engineering': 0.3125, 'mmlu_eval_accuracy_prehistory': 0.6, 'mmlu_eval_accuracy_high_school_mathematics': 0.20689655172413793, 'mmlu_eval_accuracy_professional_law': 0.38235294117647056, 'mmlu_eval_accuracy_high_school_macroeconomics': 0.5348837209302325, 'mmlu_eval_accuracy_world_religions': 0.7894736842105263, 'mmlu_eval_accuracy_college_biology': 0.75, 'mmlu_eval_accuracy_college_computer_science': 0.18181818181818182, 'mmlu_eval_accuracy_college_medicine': 0.45454545454545453, 'mmlu_eval_accuracy_miscellaneous': 0.6976744186046512, 'mmlu_eval_accuracy_professional_medicine': 0.5806451612903226, 'mmlu_eval_accuracy_nutrition': 0.6060606060606061, 'mmlu_eval_accuracy_jurisprudence': 0.5454545454545454, 'mmlu_eval_accuracy_us_foreign_policy': 0.9090909090909091, 'mmlu_eval_accuracy_global_facts': 0.3, 'mmlu_eval_accuracy_medical_genetics': 1.0, 'mmlu_eval_accuracy_moral_disputes': 0.5526315789473685, 'mmlu_eval_accuracy_abstract_algebra': 0.36363636363636365, 'mmlu_eval_accuracy_conceptual_physics': 0.34615384615384615, 'mmlu_eval_accuracy_econometrics': 0.5, 'mmlu_eval_accuracy_human_aging': 0.8260869565217391, 'mmlu_eval_accuracy_professional_psychology': 0.5507246376811594, 'mmlu_eval_accuracy_high_school_physics': 0.058823529411764705, 'mmlu_eval_accuracy_clinical_knowledge': 0.41379310344827586, 'mmlu_eval_accuracy_high_school_geography': 0.8636363636363636, 'mmlu_eval_accuracy_high_school_psychology': 0.8666666666666667, 'mmlu_eval_accuracy': 0.5582642812271578, 'epoch': 0.03}
+ 50%|███████████████████████████████████████████████████████████████████████████████                                                                               | 100/200 [2:29:20<1:21:41, 49.01s/it]Saving PEFT checkpoint...
+{'loss': 1.5671, 'learning_rate': 0.0001, 'epoch': 0.04}
+{'loss': 1.468, 'learning_rate': 0.0001, 'epoch': 0.04}
+{'loss': 1.6495, 'learning_rate': 0.0001, 'epoch': 0.04}
+{'loss': 1.6844, 'learning_rate': 0.0001, 'epoch': 0.05}
+{'loss': 2.384, 'learning_rate': 0.0001, 'epoch': 0.05}
+{'eval_loss': 1.7745016813278198, 'eval_runtime': 105.4656, 'eval_samples_per_second': 1.214, 'eval_steps_per_second': 1.214, 'epoch': 0.05}
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1531/1531 [38:49<00:00,  1.52s/it]
+{'mmlu_loss': 0.6844602518810469, 'mmlu_eval_accuracy_professional_accounting': 0.4838709677419355, 'mmlu_eval_accuracy_business_ethics': 0.7272727272727273, 'mmlu_eval_accuracy_international_law': 0.8461538461538461, 'mmlu_eval_accuracy_high_school_world_history': 0.6923076923076923, 'mmlu_eval_accuracy_college_physics': 0.45454545454545453, 'mmlu_eval_accuracy_public_relations': 0.5833333333333334, 'mmlu_eval_accuracy_management': 0.7272727272727273, 'mmlu_eval_accuracy_marketing': 0.84, 'mmlu_eval_accuracy_high_school_microeconomics': 0.46153846153846156, 'mmlu_eval_accuracy_anatomy': 0.5, 'mmlu_eval_accuracy_high_school_european_history': 0.8333333333333334, 'mmlu_eval_accuracy_high_school_government_and_politics': 0.8095238095238095, 'mmlu_eval_accuracy_college_mathematics': 0.2727272727272727, 'mmlu_eval_accuracy_logical_fallacies': 0.7222222222222222, 'mmlu_eval_accuracy_high_school_computer_science': 0.5555555555555556, 'mmlu_eval_accuracy_high_school_us_history': 0.7727272727272727, 'mmlu_eval_accuracy_high_school_biology': 0.46875, 'mmlu_eval_accuracy_formal_logic': 0.2857142857142857, 'mmlu_eval_accuracy_computer_security': 0.45454545454545453, 'mmlu_eval_accuracy_security_studies': 0.5925925925925926, 'mmlu_eval_accuracy_human_sexuality': 0.5833333333333334, 'mmlu_eval_accuracy_astronomy': 0.6875, 'mmlu_eval_accuracy_elementary_mathematics': 0.4878048780487805, 'mmlu_eval_accuracy_machine_learning': 0.6363636363636364, 'mmlu_eval_accuracy_moral_scenarios': 0.4, 'mmlu_eval_accuracy_college_chemistry': 0.125, 'mmlu_eval_accuracy_sociology': 0.8181818181818182, 'mmlu_eval_accuracy_high_school_statistics': 0.2608695652173913, 'mmlu_eval_accuracy_high_school_chemistry': 0.2727272727272727, 'mmlu_eval_accuracy_philosophy': 0.7941176470588235, 'mmlu_eval_accuracy_virology': 0.5555555555555556, 'mmlu_eval_accuracy_electrical_engineering': 0.375, 'mmlu_eval_accuracy_prehistory': 0.6, 'mmlu_eval_accuracy_high_school_mathematics': 0.20689655172413793, 'mmlu_eval_accuracy_professional_law': 0.38235294117647056, 'mmlu_eval_accuracy_high_school_macroeconomics': 0.5116279069767442, 'mmlu_eval_accuracy_world_religions': 0.8421052631578947, 'mmlu_eval_accuracy_college_biology': 0.625, 'mmlu_eval_accuracy_college_computer_science': 0.2727272727272727, 'mmlu_eval_accuracy_college_medicine': 0.4090909090909091, 'mmlu_eval_accuracy_miscellaneous': 0.6976744186046512, 'mmlu_eval_accuracy_professional_medicine': 0.5806451612903226, 'mmlu_eval_accuracy_nutrition': 0.6060606060606061, 'mmlu_eval_accuracy_jurisprudence': 0.5454545454545454, 'mmlu_eval_accuracy_us_foreign_policy': 0.9090909090909091, 'mmlu_eval_accuracy_global_facts': 0.3, 'mmlu_eval_accuracy_medical_genetics': 1.0, 'mmlu_eval_accuracy_moral_disputes': 0.5263157894736842, 'mmlu_eval_accuracy_abstract_algebra': 0.36363636363636365, 'mmlu_eval_accuracy_conceptual_physics': 0.38461538461538464, 'mmlu_eval_accuracy_econometrics': 0.3333333333333333, 'mmlu_eval_accuracy_human_aging': 0.8260869565217391, 'mmlu_eval_accuracy_professional_psychology': 0.5507246376811594, 'mmlu_eval_accuracy_high_school_physics': 0.11764705882352941, 'mmlu_eval_accuracy_clinical_knowledge': 0.41379310344827586, 'mmlu_eval_accuracy_high_school_geography': 0.8181818181818182, 'mmlu_eval_accuracy_high_school_psychology': 0.8166666666666667, 'mmlu_eval_accuracy': 0.5564941809356316, 'epoch': 0.05}
+{'loss': 1.4593, 'learning_rate': 0.0001, 'epoch': 0.05}
+{'loss': 1.4768, 'learning_rate': 0.0001, 'epoch': 0.06}
+{'loss': 1.4924, 'learning_rate': 0.0001, 'epoch': 0.06}
+{'loss': 1.6138, 'learning_rate': 0.0001, 'epoch': 0.07}
+{'loss': 2.2459, 'learning_rate': 0.0001, 'epoch': 0.07}
+{'eval_loss': 1.798527479171753, 'eval_runtime': 101.7857, 'eval_samples_per_second': 1.258, 'eval_steps_per_second': 1.258, 'epoch': 0.07}
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1531/1531 [38:25<00:00,  1.51s/it]
+{'mmlu_loss': 0.6745707825225292, 'mmlu_eval_accuracy_professional_accounting': 0.4838709677419355, 'mmlu_eval_accuracy_business_ethics': 0.6363636363636364, 'mmlu_eval_accuracy_international_law': 0.8461538461538461, 'mmlu_eval_accuracy_high_school_world_history': 0.6923076923076923, 'mmlu_eval_accuracy_college_physics': 0.36363636363636365, 'mmlu_eval_accuracy_public_relations': 0.6666666666666666, 'mmlu_eval_accuracy_management': 0.8181818181818182, 'mmlu_eval_accuracy_marketing': 0.8, 'mmlu_eval_accuracy_high_school_microeconomics': 0.6153846153846154, 'mmlu_eval_accuracy_anatomy': 0.5714285714285714, 'mmlu_eval_accuracy_high_school_european_history': 0.7777777777777778, 'mmlu_eval_accuracy_high_school_government_and_politics': 0.8095238095238095, 'mmlu_eval_accuracy_college_mathematics': 0.36363636363636365, 'mmlu_eval_accuracy_logical_fallacies': 0.7222222222222222, 'mmlu_eval_accuracy_high_school_computer_science': 0.5555555555555556, 'mmlu_eval_accuracy_high_school_us_history': 0.8181818181818182, 'mmlu_eval_accuracy_high_school_biology': 0.53125, 'mmlu_eval_accuracy_formal_logic': 0.21428571428571427, 'mmlu_eval_accuracy_computer_security': 0.6363636363636364, 'mmlu_eval_accuracy_security_studies': 0.6296296296296297, 'mmlu_eval_accuracy_human_sexuality': 0.5833333333333334, 'mmlu_eval_accuracy_astronomy': 0.75, 'mmlu_eval_accuracy_elementary_mathematics': 0.3902439024390244, 'mmlu_eval_accuracy_machine_learning': 0.5454545454545454, 'mmlu_eval_accuracy_moral_scenarios': 0.41, 'mmlu_eval_accuracy_college_chemistry': 0.125, 'mmlu_eval_accuracy_sociology': 0.7727272727272727, 'mmlu_eval_accuracy_high_school_statistics': 0.34782608695652173, 'mmlu_eval_accuracy_high_school_chemistry': 0.3181818181818182, 'mmlu_eval_accuracy_philosophy': 0.7941176470588235, 'mmlu_eval_accuracy_virology': 0.5555555555555556, 'mmlu_eval_accuracy_electrical_engineering': 0.25, 'mmlu_eval_accuracy_prehistory': 0.6285714285714286, 'mmlu_eval_accuracy_high_school_mathematics': 0.2413793103448276, 'mmlu_eval_accuracy_professional_law': 0.4294117647058823, 'mmlu_eval_accuracy_high_school_macroeconomics': 0.6046511627906976, 'mmlu_eval_accuracy_world_religions': 0.8421052631578947, 'mmlu_eval_accuracy_college_biology': 0.625, 'mmlu_eval_accuracy_college_computer_science': 0.18181818181818182, 'mmlu_eval_accuracy_college_medicine': 0.45454545454545453, 'mmlu_eval_accuracy_miscellaneous': 0.7209302325581395, 'mmlu_eval_accuracy_professional_medicine': 0.5161290322580645, 'mmlu_eval_accuracy_nutrition': 0.6060606060606061, 'mmlu_eval_accuracy_jurisprudence': 0.45454545454545453, 'mmlu_eval_accuracy_us_foreign_policy': 0.8181818181818182, 'mmlu_eval_accuracy_global_facts': 0.5, 'mmlu_eval_accuracy_medical_genetics': 0.9090909090909091, 'mmlu_eval_accuracy_moral_disputes': 0.6052631578947368, 'mmlu_eval_accuracy_abstract_algebra': 0.2727272727272727, 'mmlu_eval_accuracy_conceptual_physics': 0.34615384615384615, 'mmlu_eval_accuracy_econometrics': 0.5, 'mmlu_eval_accuracy_human_aging': 0.8260869565217391, 'mmlu_eval_accuracy_professional_psychology': 0.5652173913043478, 'mmlu_eval_accuracy_high_school_physics': 0.35294117647058826, 'mmlu_eval_accuracy_clinical_knowledge': 0.5172413793103449, 'mmlu_eval_accuracy_high_school_geography': 0.8181818181818182, 'mmlu_eval_accuracy_high_school_psychology': 0.85, 'mmlu_eval_accuracy': 0.5715981488410985, 'epoch': 0.07}
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 200/200 [4:57:24<00:00, 38.35s/it]Saving PEFT checkpoint...
+{'train_runtime': 17857.1127, 'train_samples_per_second': 0.179, 'train_steps_per_second': 0.011, 'train_loss': 1.7639566564559936, 'epoch': 0.07}
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 200/200 [4:57:37<00:00, 89.29s/it]
+Saving PEFT checkpoint...
+***** train metrics *****
+  epoch                    =       0.07
+  train_loss               =      1.764
+  train_runtime            = 4:57:37.11
+  train_samples_per_second =      0.179
+  train_steps_per_second   =      0.011
+100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 128/128 [01:40<00:00,  1.27it/s]
+100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1531/1531 [38:35<00:00,  1.51s/it]
+***** eval metrics *****
+  epoch                   =       0.07
+  eval_loss               =     1.7985
+  eval_runtime            = 0:01:42.39
+  eval_samples_per_second =       1.25
+  eval_steps_per_second   =       1.25
+
+```
+
+显存占用：
+
+```
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    0   N/A  N/A     16138      C   python                          44515MiB |
++-----------------------------------------------------------------------------+
+```
+
+可以看到，对于显存的占用不到48G，当然使用QLoRA微调模型的速度要慢于使用LoRA进行微调。具体原因请查看大模型参数高效微调技术原理综述（五）-LoRA、AdaLoRA、QLoRA一文了解其技术原理。
+
+本文讲述了使用高效微调技术QLoRA训练LLaMA大模型，并讲述了如何将lora权重合并到原始模型权重以及模型推理。
+
+------
+------
+## 6. Alpaca： A Strong, Replicable Instruction-Following Model
+
+<!-- https://crfm.stanford.edu/2023/03/13/alpaca.html -->
+
+<!-- https://zhuanlan.zhihu.com/p/621592728 -->
+
+<!-- https://blog.csdn.net/LZL2020LZL/article/details/130145555 -->
+
+<!-- https://zhuanlan.zhihu.com/p/615227156 -->
+
+<!-- https://zhuanlan.zhihu.com/p/631811216 -->
+
+<!-- https://zhuanlan.zhihu.com/p/609636289 -->
+
+<!-- https://blog.csdn.net/v_JULY_v/article/details/129709105 -->
+
+!> 原文地址： https://crfm.stanford.edu/2023/03/13/alpaca.html
+
+LLaMA是Meta于2023年2月发布的模型集合（参数量7B/13B/33B/65B），其中LLaMA-13B在大多数数据集上超过了GPT3（175B），LLaMA-65B达到了和Chinchilla-70B、PaLM-540B相当的水平。初此之外，LLaMA模型所使用的训练语料都是开源语料（1.4T tokens）；模型结构上，LLaMA在Transformer-Decoder-Only基础上引入预归一（参考GPT3）、SwiGLU激活函数（参考PaLM）和旋转位置编码（参考GPTNeo）；算力资源上，65B模型使用2048张A100 80G，按照每张卡每秒处理380个token来算，训完1.4T token需要21天。LLaMA暂不支持商用。
+
+### 6.1 概述
+
+诸如GPT-3.5(text-davinci-003)、ChatGPT、Claude、Bing Chat等指令跟随模型已经快速的变强。很多用户经常与这种模型进行交互，甚至已经使用在了工作中。然而，尽管得到了广泛传播，指令跟随模型仍然存在很多不足，比如：它们可能生成错误信息、传播社会刻板印象、生产有毒的语言。
+
+为了在这些紧迫性问题上取得最大进展，学术界的参与是至关重要的。不幸的是，学术界在指令跟随模型上很难进行学术研究，因为没有在能力上接近闭源模型（比如OpenAI的text-davinci-003）的可访问模型。
+
+我们正在发布一个关于指令跟随的语言模型的研究成果，又称作Alpaca，它是在Meta的LLaMA 7B模型上进行微调得到的。Alpaca采用52K的指令跟随说明，使用self-instruct方法在text-davinci-003上生成的。在很多的[self-instruct](https://arxiv.org/abs/2212.10560)评测集上，Alpaca表现出与OpenAI的text-davinci-003相当的效果，但是Alpaca模型对比Text-davinci-003小很多且容易得到。
+
+我们正在发布训练细节和数据，并且未来会开源模型的权重。为了研究界能够更好地体验Alpaca的效果，同时也提供了一个[交互式的界面](https://alpaca-ai.ngrok.io/)。交互式访问可以暴露出意外的功能和故障，这将引导我们未来对这些模型的评测。
+
+!> 我们重申Alpaca仅仅用作学术研究，禁止任何形式的商业应用，这样的决定主要有三点考虑：
+
++ Alpaca是基于LLaMA，LLaMA是没有商业版权的；
++ instruction数据是基于OpenAI的text-davinci-003，其禁止用作OpenAI的竞争；
++ 还没有设计足够的安全策略，Alpaca还没有准备好作为通用工具。
+
+
+### 6.2 训练方法
+
+在学术领域训练一个高质量的指令跟随模型主要有两项重要的挑战：一个强大的预训练语言模型和高质量的指令跟随数据。第一个挑战是通过Meta的新模型LLaMA解决的，第二个挑战，通过self-instruct论文中提出的通过现有大语言模型进行自动生成指令数据的方法。特别地，Alpaca使用LLaMA-7B模型进行有监督的微调，指令数据使用OpenAI的text-davinci-003生成的52K的指令跟随说明。
+
+下图表明了我们如何得到的Alpaca模型。数据方面，借鉴了self-instruct的方法，使用self-instruct seed set中175个人工撰写的instruction-output对。然后使用text-davinci-003通过in-context-learning生成更多的指令。最终生成了52K不同的指令和相应的输出，使用OpenAI API花费不超过`$500`。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-5/p1.jpg" /> 
+</div>
+
+有了指令跟随数据，我们使用`Hugging Face`的训练框架微调LLaMA模型，此训练框架支持数据并行和混合精度训练。整个训练过程使用`8张`80GB的`A100`训练了3个小时，总共花费大概也就`$100`。
+
+
+### 6.3 初步评价
+
+为了评价Alpaca，我们在self-instruct的验证集上进行了人工评价。这个评价数据集是self-instruct作者收集的，覆盖了一系列面向用户的指令，包括：写邮件、社交媒体和生产力工具。评价方法是在text-davinci-003和Alpaca 7B上进行成对盲评。我们发现在这两个模型上的效果非常相似，Alpaca对比text-davinci-003的结果是90:89。
+
+我们对这样的结果感到很惊讶，在更小模型尺寸下使用少量的指令跟随数据竟然可以取得相当的效果。此外，我们在很多交互式的示例上也发现Alpaca 7B与text-davinci-003效果相当。同时，我们也承认在评价数据规模上和多样性上有局限，所以开放demo面向大众测试。如下是一些Alpaca 7B上的效果展示。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-5/p2.png" /> 
+</div>
+
+
+### 6.4 已知的局限性
+
+Alpaca表现出了语言模型上的几个常见的缺陷，包括：幻觉、有毒性、模式化思维。其中幻觉是Alpaca的常见问题，甚至于text-davinci-003对比也是如此。
+
+例如，在下图中，Alpaca错误地说坦桑尼亚的首都是达累斯萨拉姆，达累斯萨拉姆是坦桑尼亚最大的城市.
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-5/p3.png" /> 
+</div>
+
+此外，Alpaca也容易一本正经的传播错误信息。比如
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-5/p4.png" /> 
+</div>
+
+### 6.5 未来方向
+
+未来Alpaca可能的研究方向主要包括：
+
++ 评估：我们需要更严格地评估羊驼。
++ 安全性：未来可能进一步研究Alpaca的风险，提升其安全性，方法可能包括：automatic red teaming, auditing, and adaptive testing.
++ 理解：从训练范式上希望更深入的理解如何提升能力。
+
+
+### 6.6 使用LoRA对Chinese-LLaMa-Alpaca进行微调
+<!-- https://zhuanlan.zhihu.com/p/631811216 -->
+
+!> github: https://github.com/taishan1994/Chinese-LLaMA-Alpaca-LoRA-Tuning
+
+**1.  Chinese-LLaMA-Alpaca-LoRA-Tuning**
+
+使用LoRA对Chinese-LLaMA-Alpaca进行微调。整体的结构非常简单，构造好相应格式的数据后就可以开始训练。
+
+Facebook官方发布的[LLaMA模型](https://github.com/facebookresearch/llama)禁止商用，并且官方没有正式开源模型权重（虽然网上已经有很多第三方的下载地址）。为了遵循相应的许可，目前暂时无法发布完整的模型权重，敬请各位理解（目前国外也是一样）。自行搜索下载地址。
+
+训练好的实体识别LoRA权重已经位于checkpoint下。
+
+**2. 依赖**
+
+Linux操作系统为Ubantu，GPU为A40-48G显存。
+
+```
+mpi4py
+transformers==4.28.1
+peft==0.3.0
+icetk
+deepspeed==0.9.2
+accelerate
+cpm_kernels
+sentencepiece==0.1.99
+peft=0.3.0
+torch=2.0.0 
+```
+
+**3. 说明**
+
++ 目录结构
+
+```
+--checkpoint：保存模型
+----msra：数据集名称
+--------model_adapter
+------------train_deepspeed
+----------------adapter_model
+--------------------adapter_config.json
+--------------------adapter_model.bin
+--------------------train_args.json
+------------train_trainer
+----------------adapter_model
+--------------------adapter_config.json
+--------------------adapter_model.bin
+--------------------train_args.json
+--model_hub：预训练模型
+----7B：英文LLaMA原始权重
+----7B-hf：英文权重转换为hugging face格式权重
+----chinese-llama-plus-lora-7b：中文llama-7b的lora权重
+----chinese-alpaca-plus-lora-7b：中文alpaca-7b的lora权重
+----chinese-alpaca-7b：合并lora后的最终的模型
+----tokenizer.model：7B文件
+----convert_llama_weights_to_hf.py
+----merge_llama_with_chinese_lora.py
+--data：数据
+----msra：数据集名称
+--------instruct_data：指令数据
+------------dev.txt
+------------train.txt
+--------ori_data：原始数据
+--chat_ner.py：闲聊
+--train_deepspeed.py：使用原生deepspeed训练
+--train_trainer.py： 使用transformers的Trainer进行训练
+--test.py：测试训练好的模型
+--predict.py：预测
+--process.py：处理数据为instruct_data
+--dataset.py：加载数据为相应的格式
+--deepspeed.json：deepspeed配置文件，用于trasnformers的Trainer
+--config_utils.py：用于用字典定义配置，并接收命令行参数
+
+```
+
++ 转换得到中文alpaca
+
+1、下载好7B、[llama-lora](https://huggingface.co/ziqingyang/chinese-llama-plus-lora-7b)、[alpaca-lora](https://huggingface.co/ziqingyang/chinese-alpaca-plus-lora-7b)到model_hub下。进入到model_hub目录下。
+
+2、将llama转换为hugging face支持的格式：`python convert_llama_weights_to_hf.py --input_dir ./ --model_size 7B --output_dir ./7B-hf`。如果报错：`If this call came from a _pb2.py file, your generated code is out of date and must be regenerated with protoc >= 3.19.0`则可以`pip install --upgrade protobuf==3.20.1`，然后：`python convert_llama_weights_to_hf.py --input_dir ./ --model_size tokenizer_only --output_dir ./7B-hf`。最终我们可以得到`7B-hf`。
+
+3、合并lora到llama上：`python merge_llama_with_chinese_lora.py --base_model "./7B-hf" --lora_model "./chinese-llama-plus-lora-7b,chinese-alpaca-plus-lora-7b" --output_type "huggingface" --output_dir "./chinese-alpaca-7b" `。最终我们可以得到`chinese-alpaca-7b`。
+
+4、回到主目录，进行闲聊验证是否得到正确的模型：`python chat_ner.py --base_model "./model_hub/chinese-alpaca-7b" --tokenizer_path "./model_hub/chinese-alpaca-7b" --with_prompt --interactive`
+
++ 数据格式
+
+这里我们以命名实体识别任务为例，数据在data/msra下，其中ori_data为原始数据,instruct_data为处理后的数据，数据格式为一条一个样本，具体是：
+
+```
+{"instruct": "你现在是一个实体识别模型，你需要提取文本里面的人名、地名、机构名，如果存在结果，返回'实体_实体类型'，不同实体间用\n分隔。如果没有结果，回答'没有'。", "query": "文本：因有关日寇在京掠夺文物详情，藏界较为重视，也是我们收藏北京史料中的要件之一。", "answer": "日_地名\n京_地名\n北京_地名"}
+```
+
+可以按照自己的任务自行构建。
+
++ 一般过程
+
+1、data下新建数据集，用process.py处理数据为instruct_data下的数据。
+
+2、这里使用`train_trainer.py`进行训练，为了能够让transformers的Trainer在训练的过程中保存lora权重，对Trainer进行相应的修改，参考：[https://github.com/huggingface/peft/issues/96](https://github.com/huggingface/peft/issues/96) 。因为有了`config_utils.py`，我们可以在字典里面定义相关参数，然后可以在命令行修改参数的值（嵌套参数之间用`_`分隔）。
+
+```
+args = {
+    "data_name": "msra",  # 数据集名称
+    "model_dir": "/root/autodl-tmp/chatglm-6b/",  # chatglm-6b地址，修改为自己的路径
+    "lora_r": 8,  # lora参数
+    "max_seq_length": 128+64,  # 句子最大长度
+    "instruct_column": "instruct",  # instruct列名
+    "query_column": "query",  # query列名
+    "response_column": "answer",  # answer列名
+    "train_path": "data/msra/instruct_data/train.txt", # 训练数据，修改为自己数据
+    "dev_path": "data/msra/instruct_data/dev.txt",  # 测试数据，修改为自己数据
+    "train_batch_size": 12,  # 训练batch_size
+    "gradient_accumulation_steps": 1,  # 默认就好
+    "save_dir": "。/checkpoint/msra/train_trainer/",  # 保存模型位置，修改为自己的路径
+    "num_train_epochs": 1,  # 训练epoch
+    "local_rank": -1,  # deepspeed所需，默认就好
+    "log_steps": 10,  # 多少步打印一次结果
+    "save_steps": 50,  # 多少步保存一次模型
+    "deepspeed_json_path": "deepspeed.json" # deepspeed配置
+}
+```
+
+需要注意的是，Trainer中使用deepspeed要保持deepspeed定义的参数和Trainer里面参数保持一致，比如：`deepspeed.json`：
+
+```
+{
+  "train_micro_batch_size_per_gpu": 12,
+  "optimizer": {
+    "type": "Adam",
+    "params": {
+      "lr": 1e-05,
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "eps": 1e-08,
+      "weight_decay": 0.0005
+    }
+  },
+  "fp16": {
+    "enabled": true
+  },
+  "zero_optimization": {
+    "stage": 1,
+    "offload_optimizer": {
+      "device": "cpu",
+      "pin_memory": true
+    },
+    "allgather_partitions": true,
+    "allgather_bucket_size": 200000000.0,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 200000000.0,
+    "contiguous_gradients": true
+  }
+}
+
+```
+
+train_micro_batch_size_per_gpu和per_device_train_batch_size
+
+lr和learning_rate
+
+betas里面和adam_beta1、adam_beta2
+
+weight_decay和weight_decay
+
+fp16和fp16
+
+默认的话不用修改这些。
+
++ 训练
+
+```
+deeepspeed train_deepspeed.py 或者 deepspeed train_trainer.py
+```
+
++ 测试
+
+修改data_name，运行：`python test.py`
+
+```
+预测： ['_地名\n中国_地名\n朝鲜_地名\n台湾_地名\n', '释迦_人名', '邓小平_人名\n日本_地名', '最高人民法院_机构名', '铁道部_机构名', '元_地名', '美_地名\n台_地名', '长安_地名', '京沪高速铁路_地名\n沪沪铁路_地名', '人民大会堂_地名 ', '_地名\n中国共产党_机构名', '长城_机构名\n王朝公司_机构名', '玉峰_地名', '_地名', '_地名', '开来_人名\n北京开来律师事务所_机构名', '_地名女儿_地名', '海道新干线_机构名', '瑞士_地名\n西班牙_地名\n比利时_地名\n丹麦_地名', '玉峰山_地名\n栋梁河_地名']
+
+真实： ['日本_地名\n中国_地名\n朝鲜_地名\n台湾_地名', '释迦_人名', '邓小平_人名\n日本_地名', '最高人民法院_机构名', '铁道部_机构名', '岭南_地名', '美_地名\n台_地名', '长安_地名', '京沪高速铁路_地名\n京沪铁路_地名', '人民大会堂_地名', '中国_地名\n中国共产党_机构名', '长城_机构名\n王朝公司_机构名', '玉峰_地名', '中国_地名', '中国_地名', '开来_人名\n北京开来律师事务所_机构名', '美国_地名\n中_地名', '东海道新干线_地名', '瑞士_地名\n西班牙_地名\n比利时_地名\n丹麦_地名', '玉峰山_地名\n栋梁河_地名']
+```
+
+
++  预测
+
+修改data_name，运行：`python predict.py`
+
+```
+文本 >>>  "你现在是一个实体识别模型，你需要提取文本里面的人名、地名、机构名，如果存在结果，返回'实体_实体类型'，不同实体间用\n分隔。如果没有结果，回答'没有'。文本：我们是受到郑振铎先生、阿英先生著作的启示，从个人条件出发，瞄准现代出版史研究的空白，重点集藏解放区、国民党毁禁出版物。"
+预测 >>>  郑振铎_人名
+阿英_人名
+国民党_机构名
+真实 >>>  郑振铎_人名
+阿英_人名
+国民党_机构名
+文本 >>>  "你现在是一个实体识别模型，你需要提取文本里面的人名、地名、机构名，如果存在结果，返回'实体_实体类型'，不同实体间用\n分隔。如果没有结果，回答'没有'。文本：去年，我们又被评为“北京市首届家庭藏书状元明星户”。"
+预测 >>>  市_地名
+真实 >>>  北京市_地名
+文本 >>>  "你现在是一个实体识别模型，你需要提取文本里面的人名、地名、机构名，如果存在结果，返回'实体_实体类型'，不同实体间用\n分隔。如果没有结果，回答'没有'。文本：藏书家、作家姜德明先生在1997年出版的书话专集《文林枝叶》中以“爱书的朋友”为题，详细介绍了我们夫妇的藏品及三口之家以书为友、好乐清贫的逸闻趣事。"
+预测 >>>  姜德明_人名
+真实 >>>  姜德明_人名
+
+```
+
++ 闲聊
+
+修改data_name，运行：`python chat_ner.py --base_model "./model_hub/chinese-alpaca-7b" --tokenizer_path "./model_hub/chinese-alpaca-7b" --lora_model "./checkpoint/msra/train_trainer/adapter_model" --with_prompt --interactive`
+
+```
++ 该模式下仅支持单轮问答，无多轮对话能力。
++ 如要进行多轮对话，请使用llama.cpp或llamachat工具。
+-------------------------------------------------------------------------------------
++ This mode only supports single-turn QA.
++ If you want to experience multi-turn dialogue, please use llama.cpp or llamachat.
+=====================================================================================
+Input:你好  
+Response:  Hello!
+
+
+Input:你现在是一个实体识别模型，你需要提取文本里面的人名、地名、机构名，如果存在结果，返回'实体_实体类型'，不同实体间用\n分隔。如果没有结果，回答'没有'。文本：我们是受到郑振铎先生、阿英先生著作的启示，从个人条件出发，瞄准现代出版史研究的空白，重点集藏解放区、国民党毁禁出版物。
+Response:  郑振铎_人名
+阿英_人名
+
+
+Input:你现在是一个实体识别模型，你需要提取文本里面的人名、地名、机构名，如果存在结果，返回'实体_实体类型'，不同实体间用\n分隔。如果没有结果，回答'没有'。文本：去年，我们又被评为“北京市首届家庭藏书状元明星户”。
+Response:  北京市_地名
+
+
+Input:你现在是一个实体识别模型，你需要提取文本里面的人名、地名、机构名，如果存在结果，返回'实体_实体类型'，不同实体间用\n分隔。如果没有结果，回答'没有'。文本：藏书家、作家姜德明先生在1997年出版的书话专集《文林枝叶》中以“爱书的朋友”为题，详细介绍了我们夫妇的藏品及三口之家以书为友、好乐清贫的逸闻趣事。
+Response:  姜德明_人名
+```
+
+原始模型也并没有退化。
+
++ 报错解决
+
+安装mpi4py报错
+
+```
+sudo apt-get update
+sudo apt-get install openmpi-bin libopenmpi-dev
+pip install mpi4py
+```
+
+**4. 补充**
+
++ 怎么训练自己的数据？ 按照instruct_data下的数据结构构造数据，定义好相关参数运行即可。
++ 怎么进行预测？ 在test.py中，预测时可根据自己的任务进行解码。
++ 为什么不进行评价指标的计算？ 只是作了初步的训练，难免效果不太好就不进行评价指标的计算了，可以在test.py里面自行定义。
+
+
+**参考**
+
+[从0到1复现斯坦福羊驼（Stanford Alpaca 7B）](https://mp.weixin.qq.com/s/I4h3WXGwqEPVKbgy-BmpoA)
+
+### 6.7 visual-med-alpaca
+<!-- https://github.com/cambridgeltl/visual-med-alpaca -->
+
+!> github: https://github.com/cambridgeltl/visual-med-alpaca
+!> Blog: https://cambridgeltl.github.io/visual-med-alpaca/
+
+
+------
+------
+## 7. Vicuna
+
+<!-- https://zhuanlan.zhihu.com/p/621592728 -->
+<!-- https://blog.csdn.net/qq_41185868/article/details/129775107 -->
+
+
+------
+------
+## 8. MiniGPT-4:Enhancing Vision-Language Understanding with Advanced Large Language Models
+
+<!-- https://blog.csdn.net/beingstrong/article/details/130659313?spm=1001.2101.3001.6650.2&utm_medium=distribute.pc_relevant.none-task-blog-2%7Edefault%7EYuanLiJiHua%7EPosition-2-130659313-blog-130508898.235%5Ev38%5Epc_relevant_anti_vip_base&depth_1-utm_source=distribute.pc_relevant.none-task-blog-2%7Edefault%7EYuanLiJiHua%7EPosition-2-130659313-blog-130508898.235%5Ev38%5Epc_relevant_anti_vip_base&utm_relevant_index=3 -->
+
+MiniGPT-4 是前段时间由KAUST（沙特阿卜杜拉国王科技大学）开源的多模态大模型，去网站上体验了一下功能，把论文粗略的看了一遍，也做个记录。
+
+最近发布的GPT-4展示了非凡的多模态能力，例如直接从手写文本生成网站，识别图像中的幽默元素。这些特性在以前的视觉语言模型中很少被观察到。我们认为GPT-4先进的多模态生成功能的主要原因在于使用了更先进的大型语言模型（LLM）。为了验证这一现象，我们提出了MiniGPT-4，它只使用一个投影层将冻结的视觉编码器与冻结的LLM Vicuna对齐。我们的研究结果表明，MiniGPT-4具有许多与GPT-4类似的功能，如生成详细的图像描述以及通过手写草稿来创建网站。此外，我们还观察到MiniGPT-4中的其他涌现能力，包括用给定的图像创作故事和诗歌，为图像中显示的问题提供解决方案，根据食物照片教用户如何烹饪等。在我们的实验中，我们发现只使用原始图像-文本对进行预训练，会产生缺乏连贯性的包括重复和碎片句子的不自然的输出。为了解决这个问题，我们在第二阶段创建了一个高质量、对齐良好的数据集，以使用对话模板微调我们的模型。事实证明，这一步骤对于增强模型的生成可靠性和整体可用性至关重要。值得注意的是，我们的模型计算效率很高，因为我们只使用大约500万对对齐的图像-文本对来训练一个投影层。我们的代码、预训练模型和收集的数据集可在Minigpt-4 获取。
 
 
 
 
+------
+------
+## 9. 本草
+
+
+
+
+
+------
+------
+## 10. Falcon
+
+
+------
+------
+## 11. CaMA
+
+
+
+
+------
+------
+## 12. Firefly
+
+
+
+
+------
+------
+## 13. Guanaco
+
+
+------
+------
+## 14. Multimodal-GPT
+<!-- https://github.com/open-mmlab/Multimodal-GPT -->
+
+
+
+------
+------
+## 15. 其他大模型微调算法：BitFit, AdaLoRA, MAM Adapter, UniPELT
