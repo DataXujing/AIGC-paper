@@ -2717,6 +2717,8 @@ Saving PEFT checkpoint...
 
 <!-- https://blog.csdn.net/v_JULY_v/article/details/129709105 -->
 
+<!-- https://blog.csdn.net/qq_41185868/article/details/129775107 -->
+
 !> 原文地址： https://crfm.stanford.edu/2023/03/13/alpaca.html
 
 LLaMA是Meta于2023年2月发布的模型集合（参数量7B/13B/33B/65B），其中LLaMA-13B在大多数数据集上超过了GPT3（175B），LLaMA-65B达到了和Chinchilla-70B、PaLM-540B相当的水平。初此之外，LLaMA模型所使用的训练语料都是开源语料（1.4T tokens）；模型结构上，LLaMA在Transformer-Decoder-Only基础上引入预归一（参考GPT3）、SwiGLU激活函数（参考PaLM）和旋转位置编码（参考GPTNeo）；算力资源上，65B模型使用2048张A100 80G，按照每张卡每秒处理380个token来算，训完1.4T token需要21天。LLaMA暂不支持商用。
@@ -3054,24 +3056,232 @@ pip install mpi4py
 !> github: https://github.com/cambridgeltl/visual-med-alpaca
 !> Blog: https://cambridgeltl.github.io/visual-med-alpaca/
 
+**1.Abstract**
+
+本文提出Visual Med-Alpaca，是一个开源的、参数高效的生物医学基础模型，可以与医学“视觉专家”集成以进行多模态生物医学任务。该模型建立在LLaMa-7B架构上，使用由GPT-3.5-Turbo和人类专家协作策划的指令集进行训练。利用几个小时的指令调整和即插即用的视觉模块，Visual Med-Alpaca 可以执行各种医学任务。
+
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-6/demo.gif" /> 
+</div>
+
+!> 警告：仅供学术使用，不适用于真实的临床场景！
+
+**2.Overview**
+
+领域特定基础模型在生物医学领域发挥着关键作用，因为生物医学文本中使用的语言是高度专业化的，通常包含维基百科和图书等一般领域文本语料库中没有的领域特定概念和关系。经验证据表明，与现有的公开预训练语言模型（PLM）相比，对大量生物医学文本进行预训练显著提高了语言模型在各种生物医学文本挖掘任务中的性能（Lee等人，2019；Gururangan等人，2020，Gu等人，2021）。
+
+现代大型语言模型（LLM）需要前所未有的计算资源水平来进行全模型微调。
+对于大多数学术机构来说，即使是在PubMed上专门微调一个70亿参数的LLM，其成本也高得令人望而却步。
+在广泛的医学图像数据集上预训练模型以获得多模态能力会导致更高的成本。
+因此，研究人员正在探索更具成本效益的技术，例如Adapter, Instruct-Tuning, and Prompt Augmentation 
+用来开发可以在消费级显卡上训练和部署的模型，同时保持足够的性能。
+在为多模态应用连接文本和视觉的背景下，训练也可能同样昂贵（Alayrac等人，2022）。此外，据我们所知，目前还没有专门为生物医学应用设计的公开的多模态生成基础模型。
+
+为了应对这些挑战，我们引入了Visual Med-Alpaca，这是一个开源、参数高效的生物医学基础模型，具有即插即用的视觉扩展框架。
+为了开发Visual Med-Alpaca模型，我们最初通过从BigBIO存储库中的各种医学数据集中提取医学问题来创建生物医学指令集（Fries等人，2022）。
+随后，我们提示GPT-3.5-Turbo综合这些问题的答案。
+执行多轮人工过滤和编辑以细化问答对，从而生成包括54k个数据点的高质量指令集。接下来，我们将文本模型与“视觉医学专家”（即专业的医学计算机视觉模型）连接起来，将Med-Alpaca扩展为Visual Med-Alpaca。例如，在放射学领域的应用程序中，我们训练了了一个名为Med-GIT的内部放射学图像字幕模型（详见下文）。当给出输入图像时，分类器确定是否或哪个医学视觉专家负责该图像。然后指定的医学专家将图像转换为文本提示。提示管理器随后将转换后的视觉信息与文本查询合并，使Med Alpaca能够生成适当的响应。
+
+**正在进行的工作**未来的首要目标是彻底评估Visual Med-Alpaca的医疗能力和潜在缺陷，包括误导性医疗建议和不正确的医疗信息等问题。超越传统的基准测试和手动评估方法，我们的目标是关注不同的用户群体，包括医生和患者，并通过以用户为中心的方法评估模型的各个方面。这一全面评估将使我们能够确保Visual Med-Alpaca在解决各种生物医学任务和满足用户不同需求方面的可靠性和有效性。
+
+!> 同样重要的是要注意，Visual Med-Alpaca严格用于学术研究目的，在任何国家都没有合法批准用于医疗用途。
+
+**3.Model Architecture and Training Pipeline**
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-6/model.png" /> 
+</div>
+
+Visual Med-Alpaca通过prompt augmentation方法将文本和视觉模式连接起来。首先，将图像输入输入到类型分类器中，以识别用于将视觉信息转换为中间文本格式的适当模块，然后将其附加到文本输入中，用于随后的推理过程。例如，通过使用[DePlot](https://huggingface.co/docs/transformers/main/model_doc/deplot)[arxiv](https://arxiv.org/abs/2212.10505)模块，将医学图转换为中间线性化表。然后，prompt manager将从图像和文本输入中提取的文本信息合并到Med-Alpaca的提示中，这是一个大型语言模型，用于利用生物医学领域的专业知识生成响应。
+
+为了将生物医学知识和视觉模态纳入基础模型LLaMA-7B，我们使用两个不同的数据集进行了微调。最初，我们使用模型生成的数据集对LLaMA-7B模型进行了标准微调和低秩自适应（LoRA）微调，该数据集包括54000个生物医学示例，用于指令调整目的。其次，我们在上下文中的放射对象（ROCO）数据集上对Microsoft GIT模型进行了微调，以纳入视觉模态。
+
+**4.Domain Adaptation: Self-Instruct in the Biomedical Domain**
+
+我们的研究实现了从各种医学问答数据集（MEDIQA RQE、MedQA、MedDialog、MEDIQA QA、PubMedQA）收集查询的过程。这种方法旨在增加数据集的多样性和彻底性，并提高所获得结果的准确性和全面性。
+
+我们用GPT-3.5-Turbo以自学的方式综合这些问题的答案。GPT-3.5-Turbo模型配备了先进的自然语言处理功能，使其能够理解并生成对各种问题的类似人类的回答。这使它成为生成结构化和信息性答案的可靠工具。
+
+筛选和编辑问答对的过程是手动执行的。考虑到平衡和多样性的标准，总共仔细选择了54000个.
+
+
+**5.Visual Experts: Radiology Image Captioning, DePlot, and More**
+
+视觉输入是医学领域的重要组成部分，在医疗环境中提供不可或缺的信息。医疗保健专业人员广泛依赖视觉提示来诊断、监测和治疗患者。医学成像技术，如X射线、CT扫描和核磁共振成像，可以对内脏提供无与伦比的洞察力，检测肉眼看不见的疾病和异常。此外，科学数字和医疗记录，包括图表和表格，在医学领域很普遍。
+
+我们建议将视觉专家与Med-Alpaca联系起来，因为基础模型链接提供了一个模块化且适应性强的框架，用于整合各种视觉模块。在这个框架内，任何多模态任务都可以分为两个基本阶段：（1）图像到文本的转换，以及（2）基于衍生文本的认知推理。在我们的上下文中，视觉专家（即视觉基础模型）将医学图像转换为中间文本表示。然后，将转换后的数据用于提示（ prompt ）预训练（pre-trained)的LLM，利用LLM固有的few-shot推理能力来生成适当的响应。
+
+目前，我们的平台支持两个不同的视觉专家：Med-GIT和DePlot，之所以选择这两个专家，是因为放射学图像和绘图在医学领域中广泛存在。该系统的架构也旨在实现替代医学视觉专家的无缝集成，我们计划在不久的将来将额外的医学视觉基础模型作为视觉专家。
+
+Med-GIT模型代表了一种[GIT](https://github.com/microsoft/GenerativeImage2Text)：用于视觉和语言的生成图像到文本转换器，专门在ROCO数据集上进行了微调，以促进专门的放射学图像字幕。该模型的训练程序在我们可公开访问的Github存储库中进行了全面详细的概述。
+
+**6.Case Study**
+
+
+!> Input 1: What are the chemicals that treat hair loss? Image: No image.
+
++ **Visual Med-Alpaca:** There are several chemicals that can be used to treat hair loss, including: 1. Minoxidil: a medication that is applied to the scalp to promote hall growth. 2. Finasteride: a medication that is taken orally to slow down the production of dihydrotestosterone (DHT), a hormone that can cause hair loss. 3. Corticosteroids: topical medications that can be applied to the scalp to reduce inflammation and promote hair growth. 4. Anthralin: a medication that is applied to the scalp to promote hair growth by stimulating the production of blood cells that nourish the hair follicles. 5, Ketoconazole: a medication that is applied to the scalp to treat fungal infections that can cause hair loss. It is important to consult with a healthcare professional before using any of these chemicals to treat hair loss, as they can have potential side effects and may not be suitable for everyone.
+
++ **[Alpaca-LoRA](https://huggingface.co/spaces/tloen/alpaca-lora):** The chemicals that treat hair loss include minoxidil, finasteride, and ketoconazole.
++ **[LLama-Adapter](https://huggingface.co/spaces/csuhan/LLaMA-Adapter):** Chemicals that treat hair loss include minoxidil, finasteride, and ketoconazole. Minoxidil is a topical solution that is applied directly to the scalp and is used to stimulate hair growth. Finasteride is a pill that is taken orally and is used to block the production of the hormone dihydrotestosterone, which can cause hair loss. Ketoconazole is an antifungal medication that is used to treat scalp infections that can cause hair loss.
++ **[ChatGPT (GPT-3.5-Turbo)](https://chat.openai.com/chat):** There are several chemicals that are used to treat hair loss, including: 1. Minoxidil: This is an over-the-counter medication that is applied topically to the scalp. It works by increasing blood flow to the hair follicles, which can promote hair growth. 2. Finasteride: This is a prescription medication that is taken orally. It works by blocking the conversion of testosterone to dihydrotestosterone (DHT), which is a hormone that can cause hair loss. 3. Ketoconazole: This is an antifungal medication that is sometimes used to treat hair loss. It works by reducing inflammation and blocking the production of DHT. 4. Corticosteroids: These are anti-inflammatory medications that can be injected into the scalp. They are sometimes used to treat hair loss caused by autoimmune disorders or inflammation. 5. Spironolactone: This is a medication that is often used to treat high blood pressure, but it can also be effective in treating hair loss in women. It works by blocking the production of androgens, which can contribute to hair loss. It's important to note that the effectiveness of these treatments can vary depending on the cause and severity of hair loss. It's best to consult with a healthcare provider or a dermatologist to determine the most appropriate treatment for you.
+
+!> Input 3: What is seen in the X-ray and what should be done? image:
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-6/p2.png" /> 
+</div>
+
+
++ **Visual Med-Alpaca:** Bilateral infiltrates and bilateral pleural effusion seen in a chest x-ray may indicate a respiratory infection or other respiratory conditions such as pneumonia pulmonary edema, or pleural effusion, it is important to consult a medical professional for a proper diagnosis and treatment plan.
+
+!> Input 3: How effective is this treatment on papule? Image:
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-6/p3.png" /> 
+</div>
+
+
++ **Visual Med-Alpaca:** Based on the information provided, it appears that the treatment has been effective in reducing the size of the papule, The before and after images show a significant reduction in the size of the papule, indicating that the treatment has been successful, However, it is important to note that the control group may not have received any treatment, which could have also contributed to the reduction in size. It would be best to consult with a medical professional for a more accurate assessment of the effectiveness of the treatment.
+
+**7.Future Work**
+
+正在进行的最关键的工作之一是对Visual Med-Alpaca以及生物医学领域内的其他NLP模型进行系统评估。随着医学数据的结构和类型的变化，评估NLP模型的有效性及其在不同数据集上的可推广性至关重要。
+
+我们还期望对医学数据进行预训练可以提高NLP模型在生物医学领域的性能。它应该有助于识别和推理疾病表型、药物机制和临床概念的表达。
+
+添加基因组蛋白质模式也可能有助于在LLM中实现更好的推理。鉴于遗传和蛋白质信息对理解疾病过程至关重要，LLM可以帮助分析大量基因组数据，从而有可能识别各种疾病过程中涉及的新突变。因此，将基因组信息纳入LLM将在生物医学领域有更广泛的应用。
+
 
 ------
 ------
-## 7. Vicuna
+## 7. Vicuna:An Open-Source Chatbot Impressing GPT-4 with 90%* ChatGPT Quality
 
-<!-- https://zhuanlan.zhihu.com/p/621592728 -->
-<!-- https://blog.csdn.net/qq_41185868/article/details/129775107 -->
+<!-- https://blog.csdn.net/qq_41185868/article/details/130876638 -->
+
+!> blog: https://lmsys.org/blog/2023-03-30-vicuna/
+!> github: https://github.com/lm-sys/FastChat
+
+作者提出了一个开源的聊天机器人Vicuna-13B。它是通过训练从ShareGPT收集的用户共享对话，然后在LLaMA基础模型上进行调整而产生的。根据初步的GPT-4评估，Vicuna-13B的质量达到了ChatGPT和Bard 90%的质量，超过其他开源模型如LLaMA和Alpaca。作者提出利用GPT-4作为评估工具来评估不同聊天机器人的有效性，通过它产生的答案和分数。尽管存在局限性，但这证明了自动化评估的潜力。Vicuna-13B的训练成本很低，大约只有300美元，采用了内存优化、多轮对话的改进方法，并通过Spot实例降低了成本。该模型的代码、参数和在线演示向公众开放。最后，作者强调Vicuna存在的限制，如在涉及推理和数学的任务方面存在问题，缺少安全优化。但它可以作为未来研究解决这些限制的开端。该项目的作者：The Vicuna Team这是与来自多个机构的合作者的共同努力，包括加州大学伯克利分校、CMU、斯坦福大学、加州大学圣地亚哥分校和MBZUAI。
+
+我们推出了Vicuna-13B，这是一个通过在LLaMA上调整ShareGPT收集的用户共享对话进行训练的开源聊天机器人。利用GPT-4作为评判，初步评估显示Vicuna-13B达到OpenAI ChatGPT和谷歌Bard 90%* 的质量，在90%* 的情况下超过LLaMA和斯坦福Alpaca等其他模型。训练Vicuna-13B的成本约为300美元。
+
+!> 代码、参数以及在线演示均向公众开放用于非商业用途。根据GPT-4的有趣和非科学评估。需要进一步严格评估。
+
+How Good is Vicuna? Vicuna-13B的性能有多好？
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-7/chart.svg" /> 
+</div><p align =center>  Figure 1. Relative Response Quality Assessed by GPT-4*</p>
+
+在对Vicuna进行7万用户共享ChatGPT对话的调整后,我们发现与Alpaca相比，Vicuna能够生成更详细和结构更好的答案(见下例),质量与ChatGPT相当。
+
+然而，评估聊天机器人从来不是一件简单的任务。随着GPT-4的最新进展，我们好奇其能力是否达到了人类级别，能否实现基准生成和性能评估的自动化评估框架。我们的初步发现表明，GPT-4可以产生高度一致的排名和详细的评估，以比较聊天机器人的答案(见GPT-4判断的上例)。基于GPT-4的初步评估总结在图1中，显示Vicuna达到Bard/ChatGPT的90%* 能力。虽然这种提议的框架显示出自动化评估聊天机器人的潜力，但这还不是一个严格的方法。建立聊天机器人的评估系统仍然是一个需要进一步研究的开放问题。更多详情在评估部分提供。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-7/p1.gif" /> 
+</div>
+
+Online Demo在线演示:
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-7/p2.gif" /> 
+</div>
+
+**Overview概述**
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-7/overview.png" /> 
+</div><p align =center> Figure 2. Workflow Overview</p>
+
+大规模语言模型(LLM)的快速发展彻底改变了聊天机器人系统，表现出前所未有的智能，如OpenAI的ChatGPT。然而，**尽管性能令人印象深刻，ChatGPT的训练和架构细节仍不清楚**，阻碍了该领域的研究和开源创新。受Meta LLaMA和斯坦福Alpaca项目的启发，我们推出了Vicuna-13B，这是一个由增强数据集和易于使用的可扩展基础设施支持的开源聊天机器人。通过在LLaMA基础模型上调整从ShareGPT.com收集的用户共享对话，Vicuna-13B已经展示出与其他开源模型(如斯坦福Alpaca)相媲美的性能。本博客文章对Vicuna-13B的性能进行初步评估，并描述了其训练和服务基础设施。我们还邀请社区与我们的在线演示互动，测试此聊天机器人的能力。
+
+图2概述了我们的工作。首先，我们从ShareGPT.com网站收集了约7万段对话，用户可以在该网站上共享他们的ChatGPT对话。其次，我们改进了Alpaca提供的训练脚本，更好地处理多轮对话和长序列。训练在`8个A100 GPU上一天内完成`，使用`PyTorch FSDP`。为了演示服务，我们实现了一个轻量级的分布式服务系统。我们通过创建80个多样化的问题，并利用GPT-4判断模型输出来对模型质量进行初步评估。为了比较两个不同的模型，我们将每个模型的输出组合在每个问题的单个提示中。然后将提示发送给GPT-4，它会评估哪个模型提供更好的回答。LLaMA，Alpaca，ChatGPT和Vicuna的详细比较见下表1
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-7/p3.png" /> 
+</div>
+
+
+**Training训练：训练方法基于alpaca构建+内存优化+通过Spot实例降低成本**
+
+Vicuna是通过调整LLaMA基础模型来创建的，使用从ShareGPT.com收集的约7万段用户共享对话。为确保数据质量，我们将HTML转换回markdown，并过滤掉一些不适当或低质量的样本。此外，我们将较长的对话分成较小的段，以符合模型的最大上下文长度。
+
+我们的训练方法基于斯坦福大学Stanford’s alpaca构建，具有以下改进。
+
+**内存优化：**为了使Vicuna理解长上下文，我们将alpaca中的最大上下文长度从512扩展到2048，这大大增加了GPU内存需求。我们通过使用梯度检查点gradient checkpointing和闪光注意力flash attention来解决内存压力。
+
+**多轮对话：**我们调整训练损失，以考虑多轮对话，并仅根据聊天机器人的输出计算调整损失。
+
+**通过Spot实例降低成本：**数据集扩大40倍和序列长度增加4倍的训练会带来相当大的训练费用挑战。我们采用SkyPilot托管的Spot实例SkyPilot managed spot，利用更便宜的Spot实例与自动恢复预防和自动区域切换来降低成本。该解决方案将7B模型的训练成本从500美元降低到约140美元，13B模型的训练成本从约1,000美元降低到300美元。
+
+**Serving服务：分布式工作节点+灵活添加GPU节点**
+
+我们构建了一个能够使用分布式工作节点服务多个模型的服务系统。它支持从本地集群和云中灵活添加GPU工作节点。通过利用容错控制器和SkyPilot中的托管Spot功能，此服务系统可以与来自多个云的更便宜的Spot实例很好地配合使用，以降低服务成本。这目前是一个轻量级实现，我们正在努力将我们最新的研究成果集成进去。
+
+**How To Evaluate a Chatbot?如何评估聊天机器人？——提出了一种基于GPT-4的评估框架来自动评估聊天机器人的性能**
+
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-7/p4.png" /> 
+</div>
+
+
+评估AI聊天机器人是一项具有挑战性的任务，因为它需要检查语言理解、推理和上下文意识。随着AI聊天机器人变得更加先进，目前的开放基准可能不再足够。例如，斯坦福大学Alpaca使用的评估数据集self-instruct可以被当前最先进的聊天机器人有效回答，这使人类难以 辨别性能差异。更多限制包括训练/测试数据污染和潜在的创建新基准的高成本。为解决这些问题，我们提出了一种基于GPT-4的评估框架来自动评估聊天机器人的性能。
+
+首先，我们设计了八个问题类别，如费米问题、角色扮演场景和编码/数学任务，以测试聊天机器人性能的各个方面。通过精心设计提示，GPT-4能够生成基线模型难以应对的多样化和具有挑战性的问题。我们从五个聊天机器人中选择每个类别十个问题的答案：LLaMA、Alpaca、ChatGPT、Bard和Vicuna。然后我们要求GPT-4根据有用性、相关性、准确性和细节评价它们的答案质量。我们发现GPT-4不仅可以产生相对一致的分数，而且能够详细解释为什么给出这样的分数(详细示例链接)。然而，我们也注意到GPT-4在判断编码/数学任务方面不是很好。
+
+图3显示了所有基准线和Vicuna之间的比较结果。在80%的问题中，GPT-4更喜欢Vicuna而不是最先进的开源模型(LLaMA，Alpaca)，并达到专有模型(ChatGPT，Bard)的竞争性能。在45%的问题中，GPT-4将Vicuna的回答评为优于或等于ChatGPT的回答。由于GPT-4在10点量表上为每个回答分配一个定量得分，我们通过将每个模型在80个问题上获得的得分相加来计算每个(基准，Vicuna)比较对的总得分。如表2所示，Vicuna的总得分是ChatGPT的92%。尽管最近有所进展，但这些聊天机器人仍面临一些限制，如难以应对基本的数学问题或具有有限的编码能力。
+
+虽然此提出的评估框架展示了评估聊天机器人的潜力，但由于大语言模型容易产生幻觉，所以这还不是一个严格或成熟的方法。开发全面标准化的聊天机器人评估系统仍然是一个需要进一步研究的开放问题。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-7/p5.png" /> 
+</div>
+
+**Limitations局限性—不擅长涉及推理或数学**
+
+我们注意到，与其他大型语言模型一样，Vicuna也存在某些限制。例如，它不擅长涉及推理或数学的任务，并且在准确识别自己或确保其输出的事实准确性方面可能存在限制。此外，它还没有得到足够的优化以确保安全性或减轻潜在的 toxicity或偏见。为了解决安全问题，**我们在在线演示中使用OpenAI调解API过滤掉不适当的用户输入**。尽管如此，我们预计Vicuna可以作为未来研究解决这些限制的开放起点。
+
+**Release发行**
+
+在我们的首次发布中，我们将在GitHub repo：[https：//github.com/lm-sys/FastChat](https：//github.com/lm-sys/FastChat)上共享训练，服务和评估代码。我们还发布了Vicuna-13B模型权重，请在这里找相关说明。暂无计划发布数据集。加入我们的Discord服务器并关注我们的Twitter以获取最新动态。
+
+**License许可证**
+
+在线演示仅供非商业用途，受LLaMA模型许可证、OpenAI生成的数据使用条款和ShareGPT的隐私实践的约束。如果发现任何潜在违规行为，请联系我们。代码根据Apache许可证2.0版发布。
+
+
+**The Team团队**
+
+这是与来自多个机构的合作者的共同努力，包括加州大学伯克利分校、CMU、斯坦福大学、加州大学圣地亚哥分校和MBZUAI。
+
+```
+@misc{vicuna2023,
+    title = {Vicuna: An Open-Source Chatbot Impressing GPT-4 with 90\%* ChatGPT Quality},
+    url = {https://lmsys.org/blog/2023-03-30-vicuna/},
+    author = {Chiang, Wei-Lin and Li, Zhuohan and Lin, Zi and Sheng, Ying and Wu, Zhanghao and Zhang, Hao and Zheng, Lianmin and Zhuang, Siyuan and Zhuang, Yonghao and Gonzalez, Joseph E. and Stoica, Ion and Xing, Eric P.},
+    month = {March},
+    year = {2023}
+
+```
+
+!> 中文的Vicuna-LoRA微调项目参考：<https://zhuanlan.zhihu.com/p/624592383>,<https://github.com/Facico/Chinese-Vicuna>
 
 
 ------
 ------
+
 ## 8. MiniGPT-4:Enhancing Vision-Language Understanding with Advanced Large Language Models
 
 <!-- https://blog.csdn.net/beingstrong/article/details/130659313?spm=1001.2101.3001.6650.2&utm_medium=distribute.pc_relevant.none-task-blog-2%7Edefault%7EYuanLiJiHua%7EPosition-2-130659313-blog-130508898.235%5Ev38%5Epc_relevant_anti_vip_base&depth_1-utm_source=distribute.pc_relevant.none-task-blog-2%7Edefault%7EYuanLiJiHua%7EPosition-2-130659313-blog-130508898.235%5Ev38%5Epc_relevant_anti_vip_base&utm_relevant_index=3 -->
 
+<!-- https://zhuanlan.zhihu.com/p/627671257 -->
+
 MiniGPT-4 是前段时间由KAUST（沙特阿卜杜拉国王科技大学）开源的多模态大模型，去网站上体验了一下功能，把论文粗略的看了一遍，也做个记录。
 
-最近发布的GPT-4展示了非凡的多模态能力，例如直接从手写文本生成网站，识别图像中的幽默元素。这些特性在以前的视觉语言模型中很少被观察到。我们认为GPT-4先进的多模态生成功能的主要原因在于使用了更先进的大型语言模型（LLM）。为了验证这一现象，我们提出了MiniGPT-4，它只使用一个投影层将冻结的视觉编码器与冻结的LLM Vicuna对齐。我们的研究结果表明，MiniGPT-4具有许多与GPT-4类似的功能，如生成详细的图像描述以及通过手写草稿来创建网站。此外，我们还观察到MiniGPT-4中的其他涌现能力，包括用给定的图像创作故事和诗歌，为图像中显示的问题提供解决方案，根据食物照片教用户如何烹饪等。在我们的实验中，我们发现只使用原始图像-文本对进行预训练，会产生缺乏连贯性的包括重复和碎片句子的不自然的输出。为了解决这个问题，我们在第二阶段创建了一个高质量、对齐良好的数据集，以使用对话模板微调我们的模型。事实证明，这一步骤对于增强模型的生成可靠性和整体可用性至关重要。值得注意的是，我们的模型计算效率很高，因为我们只使用大约500万对对齐的图像-文本对来训练一个投影层。我们的代码、预训练模型和收集的数据集可在Minigpt-4 获取。
+最近发布的GPT-4展示了非凡的多模态能力，例如直接从手写文本生成网站，识别图像中的幽默元素。这些特性在以前的视觉语言模型中很少被观察到。我们认为GPT-4先进的多模态生成功能的主要原因在于使用了更先进的大型语言模型（LLM）。为了验证这一现象，我们提出了MiniGPT-4，它只使用一个投影层将冻结的视觉编码器与冻结的LLM Vicuna对齐。我们的研究结果表明，MiniGPT-4具有许多与GPT-4类似的功能，如生成详细的图像描述以及通过手写草稿来创建网站。此外，我们还观察到MiniGPT-4中的其他涌现能力，包括用给定的图像创作故事和诗歌，为图像中显示的问题提供解决方案，根据食物照片教用户如何烹饪等。在我们的实验中，我们发现只使用原始图像-文本对进行预训练，会产生缺乏连贯性的包括重复和碎片句子的不自然的输出。为了解决这个问题，我们在第二阶段创建了一个高质量、对齐良好的数据集，以使用对话模板微调我们的模型。事实证明，这一步骤对于增强模型的生成可靠性和整体可用性至关重要。值得注意的是，我们的模型计算效率很高，因为我们只使用大约500万对对齐的图像-文本对来训练一个投影层。我们的代码、预训练模型和收集的数据集可在[MiniGPT-4](https://minigpt-4.github.io/) 获取。
 
 
 
