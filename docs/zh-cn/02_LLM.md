@@ -3054,6 +3054,7 @@ pip install mpi4py
 <!-- https://github.com/cambridgeltl/visual-med-alpaca -->
 
 !> github: https://github.com/cambridgeltl/visual-med-alpaca
+
 !> Blog: https://cambridgeltl.github.io/visual-med-alpaca/
 
 **1.Abstract**
@@ -4577,6 +4578,7 @@ Running on local URL:  http://0.0.0.0:7860
 **BenTsao (original name: HuaTuo): Tuning LLaMA Model With Chinese Medical Instructions**
 
 !> arxiv:https://arxiv.org/pdf/2304.06975.pdf
+
 !> github: https://github.com/SCIR-HI/Huatuo-Llama-Med-Chinese
 
 <!-- https://blog.csdn.net/qq_27590277/article/details/130818290 -->
@@ -4584,20 +4586,102 @@ Running on local URL:  http://0.0.0.0:7860
 
 <!-- https://zhuanlan.zhihu.com/p/631732569 -->
 
-6-22
+<!-- https://mp.weixin.qq.com/s/iuQANmwCS7AXQRik7HwQPg -->
+
+### 9.1 背景
+
+当前大规模语言模型(Large Language Model)在通用域自然语言处理任务上已获得巨大的成功[1,2]，然而，由于训练预料占比有限，在部分垂直领域，如生物医学，大规模语言模型的效果仍有限，为缓解上述问题，我们提出了一种基于医学知识增强的大型语言模型指令微调方法，一种让通用大模型适配行业并改造成行业大模型的方法。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-9/p1.png" /> 
+</div>
+
+### 9.2 指令微调
+
+指令微调(Instruct-Tuning)是一种在自然语言处理（Natural Language Processing）领域中结合预训练模型（Pre-trained Model）应用的方法，主要用于改进预训练语言模型，如 FLAN[3]、GPT-4[2]的性能。指令微调的关键在于找到能有效触发模型正确响应的文本提示,利用有标签数据对大型预训练语言模型进行微调。通过在输入中添加指令，可以引导模型生成特定任务所需的输出。这种方法可以将模型适应于各种不同任务，如文本摘要、情感分析、问答系统等。指令微调的主要思路是将任务指令与原始输入文本结合，将它们一起作为模型输入。这使得模型可以将指令作为上下文信息，从而更好地生成与任务相关的输出。
+
+### 9.3 医学知识增强的大型语言模型指令微调
+
+医学知识包含各种类型的医学信息，如疾病诊断和治疗、药品信息、临床指南、研究文献、病例报告和医学图像等。语言模型在通用域上进行预训练时，由于医学知识占比相对有限，进行下游任务推理时，模型表现受制于知识储备。当前，医学知识可以通过以下几种方法融入预训练语言模型：（1）基于医学领域的数据进行微调：将预训练模型的权重用于医学领域数据的微调，以适应医学任务的需求。例如，将预训练的语言模型Fine-tune到医学文本数据上，可以提高医学文本分类、命名实体识别、关系提取等任务的性能。（2）在医学文本上进行预训练：收集医学相关的文本如医学文献、教科书、电子病历、医患对话等医学相关的文本，通过增加预训练过程中医学文本的比重，预训练模型可在预训练阶段学习医学领域的文本特征。
+
+然而，在针对更大规模的语言模型而或当前对话式语言模型（如ChatGPT）时，额外预训练所需的开销较大，一般的微调过程在任务形式上和对话形式存在差异，因此，我们提出了基于指令微调的医学知识增强方法，具体过程如下。
+
+首先，在知识库构建方面，我们汇集大量中文医学资料，包括医学病历、教材以及现有医学知识库等，以构建一个全面且丰富的中文医学知识库。这一知识库的建立为模型提供了丰富的背景知识，有助于提高其在医疗领域的专业性和准确性。
+
+其次，在数据生成方面，我们受Self-Instruct[4]和Alpaca[5]启发，运用GPT-3.5接口，通过设计合适的提示模板，生成了基于医学知识的中文对话数据。这些数据涵盖了医患对话、问诊场景、病症描述和治疗建议等多个方面的内容。这一步骤为模型提供了大量拟真实场景下的医学对话样本，有助于模型更好地理解和适应实际应用场景。
+
+在模型方面，我们选择了大型语言模型LLaMA[1]以及针对中文进行词表扩充与二次预训练的中文Alpaca-7B [7]进行指令微调，旨在提升模型在中文医学对话任务上的表现。微调过程包括构建适当的指令模板，进行数据增强，以及高效地调整参数。这些改进使得模型能够更加准确地捕捉用户的意图，并针对性地提供有价值的信息和建议。
+
+### 9.4 基于医学文献的多轮对话大型语言模型指令微调
+
+医学文献是医学信息的重要载体之一。先前工作通常选择利用MLM等预训练任务将医学文献信息“隐式”的融入语言模型中，从而提升语言模型在下游任务上的性能。例如BioBERT、PubemdBERT等模型均在大量医学文献信息上进行预训练。随着ChatGPT的横空出世，交互式对话引起了广泛关注。在交互式对话中，语言模型通过指令微调等方式与用户指令相对齐，遵循用户的指令给出反馈。为了扩展语言模型在交互式对话中知识的丰富面，我们以多轮对话为载体，将医学文献信息放入多轮对话中，通过指令微调的方式训练模型。在交互中，语言模型能够将医学文献信息“显式”的反馈给用户。
+
+在构建多轮对话数据中，我们调用了GPT-3.5的接口。构建完成的多轮对话数据样例如下图所示，其中蓝色部分是融入到多轮对话中的文献信息，绿色部分则是ChatGPT自身补充的外部知识。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-9/p2.png" /> 
+</div>
+
+经过我们自身的测试，我们观察到模型有足够的能力将文献信息进行整合来反馈给用户，但仍存在一些较严重的问题。例如，即便模型学习到了我们给定的医学文献信息，仍然无法给出相关指令的准确答案，相反，会给出许多不属于给定文献的答案（所谓的“幻觉”）。目前，我们对含幻觉在内的多种负面情况做了初步的分析，后续我们将开源数据集并进一步介绍我们的工作。
+
+### 9.5 本草（原名华驼）模型
+
+通过以上的指令微调方法，我们训练并发布了基于LLaMA-7B [1]以及中文Alpaca-7B [7]的本草模型(点击文末“阅读原文”直达仓库地址)，经过上述改进，本草在中文医疗问诊场景中展现出一定的性能提升，模型能够根据用户的问题，提供较准确、可靠的诊断建议和治疗方案，满足非专业人士对医学知识的需求。此外，模型具备一定的自适应能力，能够在不同的中文问诊场景中进行有效的应答，提升用户体验。在Github上获得一定的关注（截止发稿日已获得2500+ stars）。后续多种高阶版本的“本草”中文医学大模型正在研发中，敬请期待！
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-9/p3.png" /> 
+</div>
+
+我们的研究成果表明，结合知识的指令微调是提高大型语言模型在中文医学对话场景上性能的有效途径。这种方法具有广泛的应用前景，可以推广至其他对事实知识有需求的领域，如法律、金融和教育等，为各行业提供智能化知识服务。
+
+### 9.6 效果与展望
+
+本项目于2023年3月31日发布并开源模型参数与训练数据，目前已获得超过2500个star，我们以此提供了一种将通用领域大模型快速适配医学场景实现行业迁移的思路和方法，未来我们将不断迭代医学场景下的大型语言模型，并集成哈工大“活字”对话大模型。
+
+我们也十分关注模型在医疗伦理和隐私保护方面的问题。当前，我们采取了多种措施，确保模型在提供医疗建议时遵循伦理原则，尊重用户隐私。例如，在数据处理过程中，我们对涉及个人隐私的信息进行了脱敏处理，以保护病患的隐私权益。同时，我们还设立了相应的审核机制，确保生成的医学建议符合医疗伦理要求。
+
+同时，我们还将关注其在医疗教育领域的应用，以期模型可以协助医学生进行学术研究，提供针对性的学习建议，帮助医学生更好地掌握医学知识。此外，该项目还可以用于普及医学知识，提高公众的健康意识和自我保健能力。
+
+### 9.7 总结
+
+通过对中文大型语言模型的指令微调，我们成功地实现了一套端到端的中文医疗问诊平台。这一平台不仅有助于为非专业人士提供个性化、准确可信的医学知识服务，还能推动医疗行业的智能化发展，提高医疗服务的质量和可及性。在未来，我们将继续拓展其在医疗领域的应用范围，为更多人带来智能化的医疗服务体验。
+
+**参考文献**
+
+[1] Touvron, Hugo, et al. "Llama: Open and efficient foundation language models." arXiv preprint arXiv:2302.13971 (2023).
+
+[2] OpenAI. "GPT-4 Technical Report." arXiv preprint arXiv:2303.08774 (2023).
+
+[3] Wei, Jason, et al. "Finetuned Language Models are Zero-Shot Learners." International Conference on Learning Representations.
+
+[4] Wang, Yizhong, et al. "Self-Instruct: Aligning Language Model with Self Generated Instructions." arXiv preprint arXiv:2212.10560 (2022).
+
+[5] Alpaca. https://crfm.stanford.edu/2023/03/13/alpaca.html 
+
+[6] ChatGLM. https://github.com/THUDM/ChatGLM-6B  
+
+[7] 中文Alpaca. https://github.com/ymcui/Chinese-LLaMA-Alpaca 
+
+[8] Wang, Haochun, et al. "Huatuo: Tuning llama model with chinese medical knowledge." arXiv preprint arXiv:2304.06975(2023).
 
 
 ------
 ------
 ## 10. Firefly
 
-6-23
+6-24
+
+<!-- https://github.com/yangjianxin1/Firefly -->
+
+<!-- https://mp.weixin.qq.com/s/94Cf7e8OZ9GX-TGBmqWwKA -->
+
+<!-- https://mp.weixin.qq.com/s/3CKEfGrFP3OuCMomjffZoA -->
 
 ------
 ------
 ## 11. 百川智能开源大模型
 
-6-24,6-25
+
 
 
 ------
@@ -4630,7 +4714,11 @@ Running on local URL:  http://0.0.0.0:7860
 ------
 ## 14. 其他大模型微调算法：BitFit, AdaLoRA, MAM Adapter, UniPELT
 
-
+6-24
+<!-- https://mp.weixin.qq.com/s/2xHBE8c3hTClfAt93Z-4Rg -->
+<!-- https://mp.weixin.qq.com/s/N_N6RqKB9pjZ1tozfM5f5A -->
+<!-- https://mp.weixin.qq.com/s/M2nds_FJBXooi08qDU-4yA -->
+<!-- https://mp.weixin.qq.com/s/P_AmTa4s8dOyc_0fZBgNPA -->
 
 
 
