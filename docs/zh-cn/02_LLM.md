@@ -4669,19 +4669,708 @@ Running on local URL:  http://0.0.0.0:7860
 ------
 ## 10. Firefly
 
-6-24
-
 <!-- https://github.com/yangjianxin1/Firefly -->
 
 <!-- https://mp.weixin.qq.com/s/94Cf7e8OZ9GX-TGBmqWwKA -->
 
 <!-- https://mp.weixin.qq.com/s/3CKEfGrFP3OuCMomjffZoA -->
 
+<!-- https://mp.weixin.qq.com/s/O1QV32QRJtYjtvu6ZCDc7Q -->
+
+<!-- https://mp.weixin.qq.com/s/tyH9Ifcvw4DKqoIoYjT6Kg -->
+
+<!-- bloom -->
+
+<!-- https://zhuanlan.zhihu.com/p/617608656 -->
+<!-- https://zhuanlan.zhihu.com/p/625911234?utm_id=0 -->
+<!-- https://huggingface.co/blog/bloom -->
+
+
+!> Firefly项目地址：https://github.com/yangjianxin1/Firefly
+
+!> LLMPruner项目地址：https://github.com/yangjianxin1/LLMPruner
+
+!> Firefly权重地址：https://huggingface.co/YeungNLP/firefly-1b4 ; https://huggingface.co/YeungNLP/firefly-2b6
+
+!> firefly-train-1.1M 数据集：https://huggingface.co/datasets/YeungNLP/firefly-train-1.1M
+
+!> Belle-train_0.5M_CN数据集：https://huggingface.co/datasets/BelleGroup/train_0.5M_CN
+
+Firefly的项目基于Bloom指令微调（Instruction Tuning）得到，我们将先介绍Bloom然后介绍基于Blomm进行的指令微调后的Firefly.
+
+### 10.1 BLOOM： A 176B-Parameter Open-Access Multilingual Language Model
+
+
+!> Bloom arxiv: https://arxiv.org/abs/2211.05100
+
+!> code: https://huggingface.co/bigscience/bloom
+
+<!-- https://zhuanlan.zhihu.com/p/603518061 -->
+
+<!-- https://zhuanlan.zhihu.com/p/632780188 -->
+
+#### 1.简介
+
+预训练语言模型已经成为了现代自然语言处理pipeline中的基石，因为其在少量的标注数据上产生更好的结果。随着ELMo、ULMFiT、GPT和BERT的开发，使用预训练模型在下游任务上微调的范式被广泛使用。随后发现预训练语言模型在没有任何额外训练的情况下任务能执行有用的任务，进一步证明了其实用性。此外，根据经验观察，语言模型的性能随着模型的增大而增加(有时是可预测的，有时是突然的)，这也导致了模型规模越来越多的趋势。抛开环境的问题，训练大语言模型(LLM)的代价仅有资源丰富的组织可以负担的起。此外，直至最终，大多数LLM都没有公开发布。因此，大多数的研究社区都被排除在LLM的开发之外。这在不公开发布导致的具体后果：例如，大多数LLM主要是在英文文本上训练的。
+
+为了解决这些问题，我们提出了BigScience Large Open-science Open-access Multilingual Language Model(BLOOM)。BLOOM是在46种自然语言和13种编程语言上训练的1760亿参数语言模型，其是由数百名研究人员合作开发和发布的。训练BLOOM的计算力是由来自于法国公共拨款的GENCI和IDRIS，利用了IDRIS的Jean Zay超级计算机。为了构建BLOOM，对于每个组件进行了详细的设计，包括训练数据、模型架构和训练目标、以及分布式学习的工程策略。我们也执行了模型容量的分析。我们的总体目标不仅是公开发布一个能够和近期开发的系统相媲美的大规模多语言的语言模型，而且还记录其开发中的协调过程。
+
+#### 2.BLOOM
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p1.png" /> 
+</div>
+
+##### 2.1 训练数据
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p2.png" /> 
+</div>
+
+BLOOM是在一个称为ROOTS的语料上训练的，其是一个由498个Hugging Face数据集组成的语料。共计1.61TB的文本，包含46种自然语言和13种编程语言。上图3展示了该数据集的高层概览，上表1则详细列出了每种语言及其语属、语系和宏观区域。除了产生了语料库之外，该过程也带来了许多组织和技术工具的开发和发布。
+
+
+###### 2.1.1 数据管理
+
+大型文本语料库是由人创建且关于人的。不同的人或者机构可以"合法"地拥有这些数据，称为这些数据的权利所有任。随着机器学习开发人员将这些数据收集并整理成为越来越大的数据集时，考虑数据相关的利益方对于开发也越来越重要，包括：开发这、数据主体和权利所有人。
+
+BigScience旨在结合技术、法律、社会学等多学科知识来解决这些问题。该组织在两个不同时间尺度上关注两个主要的目标：设计一个长期的国际数据治理结构，该结构会优先考虑数据权利所有人，并为BigScience项目直接使用的数据提供具体建议。第一个目标的进展在Jernite et al.工作中展示，其进一步激发了数据管理的需求，并描述了一个由数据托管人、权利所有人和其他参与方组成的网络。这些参与者的交互旨在考虑数据和算法上的隐私、知识产权和用户权利。特别地，这种方法依赖于数据提供者和数据主机之间的结构化协议，从而指定数据的用途。
+
+虽然无法在项目开始到模型训练这相对短暂时间内建立一个完整的国际组织，但是我们也努力从这个过程中吸取了经验教训：(1) BigScience会尽量从数据提供者那里获得明确的数据使用许可；(2) 在预处理的最终阶段之前，保持单源独立并维护其可追溯性。(3) 对构成整个语料库的各个数据源采用一种组合发布的方式，从而促进可复用性和后续的研究。在Hugging Face的组织"BigScience Data"中可以访问并可视化ROOTS语料库资源。
+
+###### 2.1.2 数据源
+
+确定了数据管理策略，接下来就是决定训练语言的构成。本阶段由若干个目标驱动，这些目标有着内在的冲突。这些内存的冲突包括：构建一个使世界上尽可能多的人可以访问的语言模型，同时也需要有足够知识来管理与先前规模相当数据集的语言来改善标准文档，以及遵循数据和算法的主体权利。
+
++ 语言的选择
++ 
+基于这些考虑，我们采用渐进的方式来选择语料库中包含的语言。首先列出8个世界上使用人数最多的语言，在项目早期积极推广这些语言并邀请该语言的流利使用者加入项目。然后，根据社区的建议将原始选择中的Swahili扩展至Niger-Congo语言类别，Hindi和Urdu扩展至Indic languages。最终，我们提出若某个语言有多于3个流利语言使用者参与，则可以添加至支持列表。
+
++ 源的选择
+
+语料库的最大部分是由研讨会参与者和研究团队策划的，他们共同编写了"BigScience Catalogue"：涵盖了各种处理后或者未处理的语言列表。这采用了由Machine Learning Tokyo、Masakhane和LatinX in AI等社区所组织的hackathons形式。作为这些源的补充，其他的工作组参与者编译了特定语言的资源，例如Arabic-focused Masader repository。这种自下而上的方法共确定了252个源，每种语言至少有21个源。此外，为了增加西班牙语、中文、法语和英语资源的地理覆盖范围，参与者通过pseudocrawl确定了被添加至语料中语言的本地相关网址。
+
++ GitHub代码
+
+通过Google's BigQuer上的GitHub数据集合来进一步补充该目录中的编程语言数据集，然后使用精准匹配进行去重。
+
++OSCAR
+
+为了不偏离使用网页作为预训练数据源的标准研究，并且满足BLOOM尺寸计算代价的数据量需求，我们进一步使用版本为21.09的OSCAR作为数据源，对应于2021年2月的Common Crawl快照，其占用了最终语料的38%。
+
+###### 2.1.3 数据预处理
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p3.png" /> 
+</div>
+
+在确定了数据源之后，数据处理涉及多个数据管理的步骤。上图2可以看到构建ROOTS的pipeline总体视图。在这个过程中开发的所有工具都可以在GitHub上找到。
+
++ 获得源数据
+
+第一步涉及到从确定的数据源中获得文本数据，这包含从各种格式的NLP数据集中下载和提取文本字段、从档案中抓取和处理大量的PDF文件、从目录中的192个网站条目和数据工作组成员选择的另一些地理上不同的456个网站中提取和预处理文本。后者需要开发新工具来从Common Crawl WARC文件中的HTML中抽取文本。我们能够从539个网络的所有URL中找到并提取可用的数据。
+
++ 质量过滤
+
+在获得文本后，我们发现大多数源中包含了大量的非自然语言，例如预处理错误、SEO页面或者垃圾。为了过滤非自然语言，我们定义了一组质量指标，其中高质量文本被定义为“由人类为人类编写的”，不区分内容或者语法的先验判断。重要的是，这些指标以两种主要的方法来适应每个源的需求。首先，它们的参数，例如阈值和支持项列表是由每个语言的流利使用者单独选择的。第二、我们首先检测每个独立的源来确定哪些指标最有可能确定出非自然语言。这两个过程都是由工具进行支持来可视化影响。
+
++ 去重和隐私编辑
+
+最终，我们使用两种重复步骤来移除几乎重复的文档，并编辑了从OSCAR语料中确定出的个人身份信息。因为其被认为是最高隐私风险的来源，这促使我们使用基于正则表达式的编辑，即使表达式有一些假阳性的问题。
+
+###### 2.1.4 Prompted数据集
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p4.png" /> 
+</div>
+
+多任务提示微调(也称为instruction tuning)涉及到对预训练语言模型的微调，微调的数据集由通过自然语言提示构成的大量不同任务组成。T0证明了在多任务混合的prompted数据集上微调的模型具有强大的zero-shot泛化能力。此外，T0优于那些数量级大但是没有经过这种微调的语言模型。受这些结果启发，我们探索了使用现有自然语言数据集来进行多任务prompted微调。
+
+T0是在Public Pool of Prompt(P3)子集上进行训练的，其是一个各种现有的、开源的应用自然语言数据集的prompt集合。该prompt集合是通过BigScience合作者参与的一系列黑客马拉松创建的，其中黑客马拉松参与者为170+数据集编写了2000+的prompt。P3中的数据集覆盖了各种自然语言任务，包括情感分析、问答、自然语言推理，并且排除了有害的内容或者非自然语言。PromptSource，一个开源工具包促进了自然语言prompt的创建、共享和使用。
+
+对BLOOM预训练之后，我们应用相同的大规模多任务微调，使BLOOM具有多语言zero-shot任务泛化能力。我们称得到的模型为BLOOMZ。为了训练BLOOMZ，我们扩展了P3来包含非英语中新数据集和新任务，例如翻译。这产生了xP3，它是83个数据集的提升集合，覆盖46种语言和16中任务。正如上图4所述，xP3反映了ROOTS的语言分布。xP3中的任务包含跨语言和单语言。我们使用PromptSource来收集这些prompts，为prompt添加额外的元数据，例如输入和目标语言。为了研究多语言prompt的重要性，我们还将xP3中的英语提示用机器翻译为相应的数据集语言，来生成一个称为xP3mt的集合。
+
+
+##### 2.2 模型架构
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p5.png" /> 
+</div>
+
+###### 2.2.0 ALiBi
+<!-- https://zhuanlan.zhihu.com/p/632780188 -->
+
+这是在看faceformer，以及bloom，还有度小满的“轩辕2.0”金融大模型的时候，看到的。他们都用了ALiBi，即给注意力加上线性偏置的方法，来处理“训练的序列长度可以开到2k，而推理的序列长度可以开到4k”的情况。思想核心：
+不给词向量加入位置嵌入向量，而是用一个和query, key之间的距离成比例的一个“惩罚项”来偏置query-key的注意力得分。效果：可以加快11%的训练速度，以及减少11%的内存使用。和其他已有的位置编码的对比：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p6.png" /> 
+</div>
+
+上面的rotary，是旋转位置编码，来自苏剑林大神的论文，比较有名的是，gpt-J，复旦的moss，都使用了这个旋转位置编码了。
+
+**方法核心**
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p7.png" /> 
+</div>
+
++ 左边的第一项，是自注意力得分，关于q和k的内积的。这个和传统transformer里面的一样了。
++ 第二项是一个相对距离的矩阵，例如q1, k1之间的距离是0，所以对应位置就是0；
++ q2和k1，是相对位置偏移为k的索引1 - q的索引2，得到1-2 = -1，就对应到了中间矩阵的取值为-1了。
+
+以此类推，相对距离矩阵的中间对角线上都是0，然后左下角的取值都是对应的k的索引-q的索引了。
++ 第三项，是个坡度m。按照论文中的描述，其做法是：例如，8个heads的时候，m的取值为：
+$$1/2, 1/4, 1/8, 1/16, 1/32, 1/64, 1/128, 1/256$$
+如果是16个heads，则m的取值为：
+$$1/\sqrt(2), 1/2, 1/(2*\sqrt(2)), 1/4, ..., 1/256$$
+相当于追加了一半的$1/\sqrt(2)$到原来的8个head的每个m的取值。
+
+扩展到一般情况就是：对于$n$个head的话，$m$的取值就是 $2^{\frac{-8}{n}}$,$2^{\frac{-8}{1}},2^{\frac{-8}{2}},...,2^{\frac{-8}{n}}$,这样的$n$个坡度了。整体公式就是：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p8.png" /> 
+</div>
+
+对于第$i$个query来说，其可见范围，在自回归设置下，只能是从左边开始$1,2,...,i$个位置，而他们之间的相对距离就是：$0, -1, -2, ..., 1-i$了,即：$k$的索引 $- q$的索引。
+$k$的索引，遍历$1, 2, ..., i$；而$q$的索引，取值为$i$。
+
+如此，就有了上面的公式了。
+
+###### 2.2.1 设计方法
+
+架构设计的选择空间非常大，不可能完全探索。一种选择是完全复制现有大模型的架构。另一方面，大量改进现有架构的工作很少被采纳，采用一些推荐的实践可以产生一个更好的模型。我们采用中间立场，选择已经被证明了可扩展性良好的模型家族，以及在公开可用的工具和代码库中合理支持的模型家族。我们针对模型的组件和超参数进行了消融实验，寻求最大限度的利用我们最终的计算预算。
+
++ 消融实验设计
+
+LLM的主要吸引力是其以"zero/few-shot"的方式执行任务的能力：足够大的模型可以简单的从in-context指令和例子执行新的任务，不需要在监督样本上训练。由于对100B+模型微调很麻烦，我们评估架构决策专注在zero-shot泛化能力上，并且不考虑迁移学习。具体来说，我们衡量了不同任务集合的zero-shot表现：29个任务来自于EleutherAI Language Model Evaluation Harness(EAI-Eval)，9个任务来自T0的验证集(T0-Eval)。两者之间有很大的重叠：T0-Eval中仅有一个任务是不在EAI-Eval，尽管两者的所有prompt都不同。
+此外，也使用更小的模型进行了消融实验。使用6.7B模型对预训练目标进行消融实验，使用1.3B模型对位置嵌入、激活函数和layer normalization进行消融实验。近期，Dettmers在大于6.7B的模型上发现了相变，观察到了"异常特征"出现。那么在1.3B规模上是否能够外推自最终模型尺寸上？
+
++ 超出范围的架构
+
+我们没有考虑mixture-of-experts(MoE)，因为缺乏适合大规模训练它的广泛使用的基于GPU的代码库。类似地，我们也没有考虑state-space模型。在设计BLOOM时，它们在自然语言任务中一种表现不佳。这两种方法都很有前景，现在证明了在大规模MoE上有竞争力的结果，并在较小规模上使用具有H3的state-space模型。
+
+###### 2.2.2 架构和预训练目标
+
+虽然大多数现代语言模型都是基于Transformer架构，但是架构实现之间存在着显著的不同。显然，原始的Transformer是基于encoder-decoder架构的，许多流行的模型仅选择encoder-only或者decoder-only方法。当前，所有超过100B参数的state-of-the-art模型都是decoder-only模型。这与Raffel等人的发现相反，在迁移学习方面encoder-decoder模型显著优于decoder-only模型。
+
+在我们工作之前，文献缺乏不同架构和预训练目标的系统性评估zero-shot泛化能力。我们在Wang et al.(2022a)等人的工作中探索了这个问题，其探索了encoder-decoder和decoder-only架构以及与causal、prefix和masked language modeling预训练模型的相互作用。我们的结果显示，经过预训练之后，causal decoder-only模型的表现最好，验证了state-of-the-art LLM的选择。
+
+###### 2.2.3 建模细节
+
+在选择架构和预训练目标之外，对原始Transformer架构提出了许多的更改。例如，可选的位置嵌入方案或者新颖的激活函数。我们执行了一系列的实验来评估每个修改，在Le Scao et al.的causal decoder-only模型上。我们在BLOOM中采用了两种变化：
+
++ ALiBi位置嵌入
+
+相比于在embedding层添加位置信息，ALiBi直接基于keys和queries的距离来衰减注意力分数。虽然ALiBi的最初动机是它能够外推至更长的序列，我们发现其在原始序列长度上也能够带来更平衡的训练以及更好的下游表现，超越了可学习embeddings和旋转embeddings。
+
++ Embedding LayerNorm
+
+在训练104B参数模型的初步试验中，我们尝试在嵌入层后立即进行layer normalization，正如bitsandbytes库及其StableEmbedding层所推荐的那样。我们发现这可以显著的改善训练稳定性。尽管我们在Le Scao et al.工作中发现其对zero-shot泛化有惩罚，但我们还是在BLOOM的第一个embedding层后添加了额外的layer normalization层来避免训练不稳定性。注意初步的104B实验中使用float16，而最终的训练上使用bfloat16。因为float16一直被认为是训练LLM时观察的许多不稳定的原因。bfloat16有可能缓解对embedding LayerNorm的需要。
+上图5中展示了BLOOM的全部架构。
+
+##### 2.3 Tokenization
+
+tokenizer的设计选择通常被忽略，倾向于"默认"设置。举例来说，OPT和GPT-3都使用GPT-2的tokenizer，训练用于English。由于BLOOM训练数据的多样性本质，需要谨慎的设计选择来确保tokenizer以无损的方式来编码句子。
+
+###### 2.3.1 验证
+
+我们将本文使用的tokenizer(Acs,2019)与现有的单语言tokenizer进行比较，作为完整性检测的指标。Fertility被定义为每个单词或者每个数据集被tokenizer创造的subword数量，我们使用感兴趣语言的Universal Dependencies 2.9和OSCAR子集来衡量。在一个语言上有非常高的Fertility相比于单语言tokenizer可能表明在下游多语言上的性能下降。我们的目标是在将我们的多语言tokenizer与对应但语言tokenizer进行比较时，确保每种语言的fertility能力较低不超过10个百分点。在所有的实验中，Hugging Face Tokenizers库被用来设计和训练测试的tokenizers。
+
+
+###### 2.3.2  tokenizer训练数据
+
+我们最初使用ROOTS的非重复子集。然而，一项在tokenizer的词表上的定性研究揭示了训练数据的问题。例如，在早期版本的tokenizer上，我们发现完整URLs存储为tokens，这是由几个包含大量重复的文档导致的。这个问题促使我们移除tokenizer训练数据中的重复行。
+
+###### 2.3.3 词表大小
+
+大的词表尺寸能够降低过度分割某些句子的风险，特别是对低资源语言。我们使用150k和250k词表尺寸来执行验证实验，以便与现有的多语言建模文献进行比较。与单语言tokenizer相比，我们最终确定的词表尺寸是250k tokens来达到最初的fertility目标。因为，词表尺寸决定了embedding矩阵的尺寸，为了GPU效率embedding尺寸必须被128整除，为了使用张量并行必须被4整除。我们最终使用了250680词表尺寸，具有200个为未来应用保留的token，例如使用占位token剔除私有信息。
+
+
+###### 2.3.4 Byte-level BPE
+
+tokenizer是一个使用Byte Pair Encoding(BPE)算法进行训练的、可学习的子词tokenzier。为了在tokenization的过程中不丢失信息，tokenizer从bytes开始创建合并，而不是以字符作为最小单位。这种方式，tokenization永远不会产生未知的tokens，因为所有256个字节都可以被包含在tokenizer的词表中。此外，Byte-level BPE最大化了语言之间的词表共享。
+
+###### 2.3.5 规范化
+
+在BPE算法上游，为了尽可能地获得最通用的模型，没有对文本进行规范化。在所有情况下，添加诸如NFKC这样的unicode规范化并不能减少fertility超过0.8%，但是代价是使模型不那么通用。例如，导致2^2和22以相同方法被编码。
+
+###### 2.3.6 Pre-tokenizer
+
+我们的pre-tokenization有两个目标：产生文本的第一个划分，并且限制由BPE算法产生的令牌序列的最大长度。pre-tokenization规模使用的是下面的正则表达式：?[^(\S|[.,!?...。，、|_])]+，其将单词分开同时保留所有的字符，特别是对编程语言至关重要的空格和换行符序列。我们不使用在其他tokenizers中常见的以英文为中心的划分。我们也没有在数字上使用划分，这导致了Arabic和code的问题。
+
+
+##### 2.4 工程
+
+###### 2.4.1 硬件
+
+模型在Jean Zay上训练，其是由法国政府资助的超级计算机，归属于GENCI所有，由法国国家科学研究中心(CNRS)的国家计算中心IDRIS运行。训练BLOOM花费了3.5个月才完成，并消耗了1082990计算小时。在48个节点上进行训练，每个有8 NVIDIA A100 80GB GPUs(总共384个GPUs)；由于在训练过程中硬件可能损坏，我们也保留了4个备用节点。这些节点装备了2x AMD EPYC 7543 32-Core CPUs和512 GB的RAM，而存储采用混合全闪存和硬盘驱动的SpectrumScale(GPFS)并行文件系统。
+
+###### 2.4.2 框架
+
+BLOOM使用Megatron-DeepSpeed训练，一个用于大规模分布式训练的框架。其由两部分组成：Megatron-LM提供Transformer实现、张量并行和数据加载原语，而DeepSpeed提供ZeRO优化器、模型流水线、通过分布式训练组件。这个框架允许我们使用3D并行来高效训练---融合了三种互补的分布式深度学习方法。这些方法描述如下：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p9.png" /> 
+</div>
+
++ 数据并行(Data parallelism, DP)
+
+复制多份模型，每个副本被放置在不同设备上，并输入数据分片。该过程是并行完成的，所有模型副本在每个训练step结束时同步。
+
++ 张量并行(Tensor parallelism, TP)
+
+跨多个设备来划分模型的独立层。这种方式，我们不把整个激活张量或者梯度张量放在单个GPU上，而是把这个张量的碎片放在单个GPU上。该技术有时被称为水平并行或者层内模型并行。
+
++ 流水线并行(Pipeline parallelism, PP)
+
+在多个GPU上划分模型的层，每个GPU仅放置模型层的一小部分。这有时也称为垂直并行。
+
+最终，Zero Redundancy Optimizer(ZeRO)运行不同的进程仅持有部分数据(参数、梯度和优化器状态)以及一个训练step所需要的数据。我们使用ZeRO stage 1，意味着仅优化器状态以这种方法进行分片。
+
+上面描述的四个组件组合在一起，可以扩展至数百个GPU，具有极高的GPU利用率。我们能在A100 GPU的最快配置下实现156 TFLOPs，实现了理论峰值312 TFLOPs的一半。
+
+###### 2.4.3 浮点数格式
+
+在初步的实验中，104B参数模型在NVIDIA V100 GPUs，我们观察到数值不稳定，导致不可逆的训练发散。我们假设这些不稳定来自于最初使用的IEEE float16，动态范围非常有限的16-bit浮点数格式，可能导致溢出。我们最终获得了支持bfloat16格式的权限，其具有同float32相同的动态范围。另一方面，bfloat16精度仍然低很多，这促使我们使用混合精度训练。该技术在float32精度上执行精度敏感的操作，例如梯度累积和softmax，余下的操作则使用低精度，这允许实现高表现和训练稳定性之间的平衡。最终，我们以bfloat16混合精度执行最终的训练，其被证明解决了训练不稳定的问题。
+
+###### 2.4.4 融合CUDA核
+
+一般来说，GPU无法在检索数据同时执行这些计算。此外，现代GPU的计算性能远远高于每个操作(被称为GPU编程中的核)所需的内存传输速度。核融合是一种基于GPU计算的优化方法，通过在一次内核调用中执行多个连续操作。该方法提供了一种最小化数据传输的方法：中间结果留在GPU寄存器中，而不是复制到VRAM，从而节省开销。
+
+我们使用了Megatron-LM提供了几个定制化融合CUDA核。首先，我们使用一个优化核来执行LayerNorm，以及用核来融合各种缩放、掩码和softmax操作的各种组合。使用Pytorch的JIT功能将一个偏差项添加至GeLU激活中。作为一个使用融合核的例子，在GeLU操作中添加偏差项不会增加额外的时间，因为该操作受内存限制：与GPU VRAM和寄存器之间的数据传输相比，额外的计算可以忽略不计。因此融合这两个操作基本上减少了它们的运行时间。
+
+###### 2.4.5 额外的挑战
+
+扩展至384个GPU需要两个修改：禁止异步CUDA内核启动(为了方便调试和防止死锁)，并将参数组划分至更小的子组(以避免过多的CPU内存分配)。
+
+在训练过程中，我们面临硬件故障的问题：平均来说，每周有1-2个GPU故障。由于备份节点可用并自动使用，并且每三个小时保存一次checkpoint，因此这不会显著影响训练吞吐量。在数据loader中Pytorch死锁bug和磁盘空间故障会导致5-10h的停机时间。考虑到工程问题相对稀疏，而且由于只有一次损失峰值，该模型很快就恢复了，因此人工干预的必要性低于类似项目。
+
+##### 2.5 训练
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p10.png" /> 
+</div>
+
++ 预训练模型
+
+我们使用上表3中详细描述的超参数来训练BLOOM的6个尺寸变体。架构和超参数来自于我们的实验结果(Le Scao et al.)和先前的训练大语言模型(Brown et al.)。非176B模型的深度和宽度大致遵循先前的文献(Brown et al.)，偏离的3B和7.1B只是为了更容易适合我们训练设置。由于更大的多语言词表，BLOOM的embedding参数尺寸更大。在开发104B参数模型的过程中，我们使用了不同的Adam 
+ 参数、权重衰减和梯度裁剪来对目标稳定性进行实验，但没有发现其有帮助。对于所有模型，我们在410B tokens使用cosine学习率衰减调度，在计算允许的情况下，将其作为训练长度的上限，并对375M tokens进行warmup。我们使用权重衰减、梯度裁剪，不使用dropout。ROOTS数据集包含341B tokens的文本。然而，基于训练期间发布的修订scaling laws，我们决定在重复数据上对大模型进行额外25B tokens的训练。由于warmup tokens + decay tokens大于总的token数量，所以学习率衰减始终未达到终点。
+
++ 多任务微调
+
+微调的BLOOMZ模型维持了与BLOOM模型相同架构超参数。微调的超参数大致基于T0和FLAN。学习率则是将对应预训练模型的最小学习率加倍，然后再四舍五入。对于较小的变体，全局batch size乘以4来增加吞吐量。模型在13B tokens上进行微调，最优checkpoint根据独立的验证集选择。经过1-6B tokens微调后，性能趋于平稳。
+
++ 对比微调
+
+我们还使用了SGPT Bi-Encoder方案对1.3B和7.1B参数的BLOOM模型进行对比微调，以训练产生高质量文本嵌入的模型。我们创建了用于多语言信息检索的SGPT-BLOOM-1.7B-msmarco，以及用于多语言语义相似度的SGPT-BLOOM-1.7B-nli。然而，近期的基准测试发现，这种模型也能够推广到各种其他的嵌入任务，例如bitext挖掘、重排或者下游分类的特征抽取。
+
+##### 2.6. 发布
+
+开放性是BLOOM开发的核心，并且我们希望确保社区可以轻易的使用它。
+
+
+###### 2.6.1 Model Card
+
+遵循发布机器学习模型的最优实践，BLOOM模型连同详细的Model Card一起发布，其描述了技术规范、训练细节、预期用途、范围外用途和模型的局限。跨工作组的参与者共同来产生最终的Model Card和每个checkpoint的card。
+
+###### 2.6.2 Licensing
+
+考虑到BLOOM可能带来的潜在有害用例，我选择了不受限制的开发访问和负责任的使用之间取得平衡，包括行为使用准则来限制模型对潜在有害用例的应用。这些条款通常被包含在"Responsible AI Licenses(RAIL)"，社区在发布模型时所采用的Licenses。与BLOOM开始时采用的RAIL license显著区别是，它分离了"源代码"和"模型"。它还包括了模型的"使用"和“派生工作”的详细定义，来确保明确识别通过prompting、微调、蒸馏、logits使用和概率分布的下游使用。该license包含13项行为使用限制，这些限制根据BLOOM Model Card描述的预期用途和限制，以及BigScience道德章程来确定。该license免费提供模型，用户只要遵守条款，就可以自由使用模型。BLOOM的源代码已经在Apache 2.0开源许可证下提供访问。
+
+#### 3.评估
+
+评估主要专注在zero-shot和few-shot设置。我们的目标是呈现出BLOOM与现有LLMs相比的准确图景。由于这些模型的规模，基于prompt的方法和few-shot "in-context learning"要比微调更加常见。
+
+关于相关评估结果请参考原paper!
+
+### 10.2 Firefly(流萤): 中文对话式大语言模型
+
+<!-- https://mp.weixin.qq.com/s/O1QV32QRJtYjtvu6ZCDc7Q -->
+
+在本文中，笔者将介绍关于Firefly（流萤）模型的工作，一个中文对话式大语言模型。我们使用较小的模型参数量，如1.4B和2.6B，实现了不错的生成效果
+
+!> 项目地址：https://github.com/yangjianxin1/Firefly
+
+#### 1.项目简介
+
+Firefly（流萤）是一个开源的中文对话式大语言模型，使用指令微调（Instruction Tuning）在中文数据集上进行调优。同时使用了词表裁剪、ZeRO、张量并行等技术，有效降低显存消耗和提高训练效率。在训练中，我们使用了更小的模型参数量，以及更少的计算资源。
+
+我们构造了许多与中华文化相关的数据，以提升模型在这方面的表现，如对联、作诗、文言文翻译、散文、金庸小说等。
+
+流萤（萤火虫的别称）是中华传统文化的一个符号，虽说腐草为萤，带有悲悯意味，但萤火虽小，也能凭借其淡淡荧光，照亮夜空。本项目的名称取自杜牧的《秋夕》：银烛秋光冷画屏，轻罗小扇扑流萤。也希望本项目能够像流萤一般发出淡淡微光，为中文NLP开源社区尽绵薄之力，添砖加瓦。
+
+```
+《咏萤火》 
+ 唐.李白
+雨打灯难灭，
+风吹色更明。
+若飞天上去，
+定作月边星
+```
+
+本项目的主要工作如下：
+
++ a.数据集：firefly-train-1.1M ，一份高质量的包含1.1M中文多任务指令微调数据集，包含23种常见的中文NLP任务的指令数据。对于每个任务，由人工书写若干指令模板，保证数据的高质量与丰富度。
+
++ b.模型裁剪：我们开发了LLMPruner项目-大语言模型裁剪工具 。使用词表裁剪技术对多语种大语言模型进行权重裁剪，保留预训练知识的前提下，有效减少模型参数量，提高训练效率，并分享裁剪后的多种参数规模的Bloom模型权重。
+
++ c.权重分享：在bloom-1b4-zh和bloom-2b6-zh的基础上，进行指令微调，获得两种参数规模的中文模型：firefly-1b4和firefly-2b6。
+
++ d.训练代码：开源训练代码，支持张量并行、ZeRO、Gemini异构内存空间管理等大模型训练策略。可实现仅使用一张显卡，训练1B-2B参数量的模型。
+
+```python
+from transformers import BloomTokenizerFast, BloomForCausalLM
+device = 'cuda'
+path = 'YenugNLP/firefly-1b4'
+
+tokenizer = BloomTokenizerFast.from_pretrained(path)
+model = BloomForCausalLM.from_pretrained(path)
+model.eval()
+model = model.to(device)
+text = input('User：')
+while True:
+    text = '<s>{}</s></s>'.format(text)
+    input_ids = tokenizer(text, return_tensors="pt").input_ids
+    input_ids = input_ids.to(device)
+    outputs = model.generate(input_ids, max_new_tokens=200, do_sample=True, top_p=0.8, temperature=0.35,
+                             repetition_penalty=1.2, eos_token_id=tokenizer.eos_token_id)
+    rets = tokenizer.batch_decode(outputs)
+    output = rets[0].strip().replace(text, "").replace('</s>', "")
+    print("Firefly：{}".format(output))
+    text = input('User：')
+```
+
+#### 2.方法介绍
+
+**模型裁剪**
+
+关于LLMPruner，详见文章：[LLMPruner：大语言模型裁剪工具](https://mp.weixin.qq.com/s?__biz=MzA3MTgwODE1Ng==&mid=2247484078&idx=1&sn=690adaac3decb8447bf5a254bcd8856f&chksm=9f26a75da8512e4b673787d7d58c52970096b306232934d7fdce598347571241e443a74b6089&scene=21#wechat_redirect)
+
+LLMPruner项目链接：https://github.com/yangjianxin1/LLMPruner
+
+本项目首先使用LLMPruner项目对原始的Bloom模型进行词表裁剪，仅取出常用的中英文词表，大大降低了模型参数量，然后再对其进行指令微调。
+
+Bloom是个多语言模型，由于需要兼容多语言，所以词表有25w之多，在中文领域中，大部分词表并不会被用到。我们通过删减冗余的词表，从多语言模型中提取常用的中英文词表，最终词表从25w减少到46145，缩减为原来的18.39%，在保留预训练知识的同时，有效减少参数量，提高训练效率。
+
+我们在 bloom-1b4-zh与bloom-2b6-zh的基础上，进行指令微调，获得两种参数规模的中文模型：firefly-1b4和firefly-2b6，具有不错的效果。
+
+裁剪后的模型如下表所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p11.png" /> 
+</div>
+
+**数据集**
+
+我们收集了23个常见的中文数据集，对于每个任务，由人工书写若干种指令模板，保证数据的高质量与丰富度，数据量为115万，形成训练集firefly-train-1.1M。数据分布如下图所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p12.png" /> 
+</div>
+
+在此基础上，我们添加了Belle-train_0.5M_CN，最终得到165万的训练数据。每条数据的格式如下，包含任务类型、输入、目标输出：
+
+```
+
+{
+  "kind": "ClassicalChinese", 
+  "input": "将下面句子翻译成现代文：\n石中央又生一树，高百余尺，条干偃阴为五色，翠叶如盘，花径尺余，色深碧，蕊深红，异香成烟，著物霏霏。",
+  "target": "大石的中央长着一棵树，一百多尺高，枝干是彩色的，树叶有盘子那样大，花的直径有一尺宽，花瓣深蓝色，花中飘出奇异的香气笼罩着周围，如烟似雾。"
+}
+```
+
+训练数据集的token长度分布如下图所示，绝大部分数据的长度都小于600：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p13.png" /> 
+</div>
+
+**训练策略**
+
+在训练时，对于每条样本，我们将input与target拼接成如下格式，然后输出模型中，进行训练。
+
+```
+
+<s>input</s></s>target</s>
+```
+我们将模型的最大输入设置为512，input部分不参与计算loss，只计算target部分的损失函数。训练的超参数设置如下表所示。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p14.png" /> 
+</div>
+
+#### 3.生成效果
+
+下面展示的是firefly-1b4的部分生成效果。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p15.png" /> 
+</div>
+
+下面是Firefly模型更具特色的一些例子，Firefly对于文言文、诗词、对联、武侠小说、散文、歌词、文案生成、情感分析等中文任务具有非常优秀的表现。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p16.png" /> 
+</div>
+
+#### 4.结语
+
+经过词表裁剪后，我们的模型参数量仅为1.4B和2.6B，参数量远远小于ChatGPT和LLaMA等上百亿上千亿的模型，甚至远远小于当前主流如Belle、ChatGLM等7B左右的模型。所以在效果上仍存在以下问题：
+
++ 对于事实性知识，容易产生错误的回复。
++ 由于未经过无害化微调，可能会产生歧视、危害、违背伦理道德的言论。
++ 在代码、推理上的能力仍有欠缺。
+
+基于以上模型的局限性，我们要求本项目的代码、数据、模型等仅用于学术研究，不得用于商业用途，且不得用于对社会造成危害的用途。
+
+后续笔者将从以下方向对项目进行迭代：丰富训练数据且保证数据质量，优化训练流程，尝试更大参数量的模型。
+
+若使用本项目的数据、代码或模型，请引用本项目。
+```
+
+@misc{Firefly,
+  author = {Jianxin Yang},
+  title = {Firefly(流萤): 中文对话式大语言模型},
+  year = {2023},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/yangjianxin1/Firefly}},
+}
+```
+
+Firefly项目地址：
+
+https://github.com/yangjianxin1/Firefly
+
+
+LLMPruner项目地址：
+
+https://github.com/yangjianxin1/LLMPruner
+
+
+Firefly权重地址：
+
+https://huggingface.co/YeungNLP/firefly-1b4;
+
+https://huggingface.co/YeungNLP/firefly-2b6
+
+
+firefly-train-1.1M 数据集：
+
+https://huggingface.co/datasets/YeungNLP/firefly-train-1.1M
+
+
+Belle-train_0.5M_CN数据集：
+
+https://huggingface.co/datasets/BelleGroup/train_0.5M_CN
+
+
+
+### 10.3 QLoRA实战:使用单卡高效微调bloom-7b1，效果惊艳
+
+<!-- https://mp.weixin.qq.com/s/94Cf7e8OZ9GX-TGBmqWwKA -->
+
+在上一节中我们介绍了关于Firefly（流萤）模型的工作。对大模型进行全量参数微调需要大量GPU资源，所以我们通过对Bloom进行词表裁剪，在`4*32G`的显卡上，勉强训练起了`2.6B`的firefly模型。
+
+在本文中，我们将介绍QLoRA，由华盛顿大学提出的一种高效微调大模型的方法，可在单张A100上对LLaMA-65B进行微调。在论文中，作者的实验表明使用QLoRA微调的LLaMA-65B，可达到ChatGPT性能水平的99.3%（由GPT-4进行评价），并且QLoRA的性能可以逼近全量参数微调。作者做了丰富的实验证明这一结论。
+
+在本文中我们将对QLoRA的基本原理进行介绍，并且在Firefly项目中进行实践。我们在bloom-7b1的基础上，使用QLoRA进行中文指令微调，获得firefly-7b1-qlora-v0.1模型，具有不错的效果，生成效果见第三章。QLoRA确实是一种高效训练、效果优秀、值得尝试和深入研究的方法。
+
+论文地址：https://arxiv.org/pdf/2305.14314.pdf
+
+项目代码：https://github.com/yangjianxin1/Firefly
+
+模型权重：https://huggingface.co/YeungNLP/firefly-7b1-qlora-v0.1
+
+#### 1.QLoRA简介
+
+本章节主要对LoRA与QLoRA进行介绍(我们在前面章节已经做了详细介绍），如读者已了解本章节的内容，可直接跳过，阅读项目实践部分。
+
+**LoRA简介**
+
+在介绍QLoRA之前，简单回顾一下LoRA。LoRA的本质是在原模型的基础上插入若干新的参数，称之为adapter。在训练时，冻结原始模型的参数，只更新adapter的参数。对于不同的基座模型，adapter的参数量一般为`几百万~几千万`。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p17.png" /> 
+</div>
+
+LoRA的优势在于能够使用较少的GPU资源，在下游任务中对大模型进行微调。在开源社区中，开发者们使用LoRA对Stable Diffusion进行微调，取得了非常不错的效果。随着ChatGPT的火爆，也涌现出了许多使用LoRA对LLM进行指令微调的工作。
+
+此前，我们也实践过使用LoRA对LLM进行指令微调，虽然未进行定量分析，但主观感受LoRA比全量微调还是有一定的差距。实践下来，我们发现LoRA微调中存在以下三个痛点：
+
++ 参数空间小：LoRA中参与训练的参数量较少，解空间较小，效果相比全量微调有一定的差距。
++ 微调大模型成本高：对于上百亿参数量的模型，LoRA微调的成本还是很高。
++ 精度损失：针对第二点，可以采用int8或int4量化，进一步对模型基座的参数进行压缩。但是又会引发精度损失的问题，降低模型性能。
+
+**QLoRA简介**
+
+接下来便引入今天的主角QLoRA。整篇论文读下来，我们认为QLoRA中比较重要的几个做法如下：
+
++ 4-bit NormalFloat：提出一种理论最优的4-bit的量化数据类型，优于当前普遍使用的FP4与Int4。
++ Double Quantization：相比于当前的模型量化方法，更加节省显存空间。每个参数平均节省0.37bit，对于65B的LLaMA模型，大约能节省3GB显存空间。
++ Paged Optimizers：使用NVIDIA统一内存来避免在处理小批量的长序列时出现的梯度检查点内存峰值。
++ 增加Adapter：4-bit的NormalFloat与Double Quantization，节省了很多空间，但带来了性能损失，作者通过插入更多adapter来弥补这种性能损失。在LoRA中，一般会选择在query和value的全连接层处插入adapter。而QLoRA则在所有全连接层处都插入了adapter，增加了训练参数，弥补精度带来的性能损失。
+
+通过上述优化，只需要41G显存即可微调LLaMA-65B模型。甚至可以直接使用一张1080Ti来微调LLaMA-13B，手中的旧卡又可以继续发挥余热了。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p18.png" /> 
+</div>
+
+作者使用GPT4对各个模型进行评价，结果显示，使用QLoRA在OASST1数据集上微调得到的Guanaco-65B模型达到了ChatGPT的99.3%的性能。
+
+作者进一步采用了Elo等级分制度对各个模型进行评价，裁判为人类或者GPT-4。结果显示Guanaco-65B和Guanaco-33B均优于ChatGPT-3.5。
+
+**实验分析**
+
+QLoRA方法是否有用，其与全量参数微调的差距有多大？作者使用LLaMA-7B和Alpaca数据集进行了实验。下图结果表明，通过插入更多的adapter，能够弥补QLoRA量化带来的性能损失，复现全量参数微调的效果。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p19.jpg" /> 
+</div>
+
+除此之外，作者还将QLoRA应用于RoBERTA和T5，评测其在GLUE和Super-NaturalInstructions数据集上的表现。从下表中可以看到，QLoRA+NF4+DQ基本上复现了BF16全量微调的实验指标。
+
+下表中LoRA+BF16基本上也复现了BF16全量微调的实验指标，如果作者能加上LoRA+FP4或者LoRA+int4的实验结果，则可以更清晰地展现LoRA与QLoRA的性能差异。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p20.png" /> 
+</div>
+
+在指令微调阶段，数据质量和数据数量，哪一个更重要？作者使用三种不同的训练集，每个数据集分别使用5万、10万、15万的数据量进行训练。对于下表，纵向来看，随着数据量的增加，指标并没有明显的提升，说明数据量不是关键因素。横向来看，对于不同的数据集，指标差距甚大，说明数据质量更关键。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p21.png" /> 
+</div>
+
+值得一提的是，在论文中，作者仅使用了9千多条OASST1的数据训练得到Guanaco-65B，这进一步验证了，数据质量远比数量重要，模型的知识来源于预训练阶段。
+
+模型的知识来源于预训练阶段，指令微调目的是和人类指令进行对齐。在指令微调阶段，数据的质量与丰富度，远比数量更重要。这是最近一段时间，开源社区以及各个论文强调的一个结论，在我们的实践中也深有体会。
+
+#### 2.项目实践
+
+在本项目中，我们使用bloom-7b1作为基座模型。数据集为moss-003-sft-no-tools，这是由MOSS项目开源的中文指令微调数据集，我们随机抽取了29万条作为训练数据，训练得到firefly-7b1-qlora-v0.1。
+
+训练时，我们将多轮对话拼接成如下格式，然后进行tokenize。
+
+```
+<s>input1</s>target1</s>input2</s>target2</s>...
+```
+
+我们在一张32G显卡上使用QLoRA进行训练，在所有全连接层处都插入adapter，最终参与训练的参数量超过1亿，相当于一个bert-base的参数量。训练时只计算target部分的损失函数。
+
+训练超参数如下所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p22.png" /> 
+</div>
+
+模型的训练损失的变化趋势如下图所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p23.png" /> 
+</div>
+
+firefly-7b1-qlora-v0.1的使用方式如下：
+
+```python
+from peft import PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, BitsAndBytesConfig
+import torch
+
+model_name = 'bigscience/bloom-7b1'
+adapter_name = 'YeungNLP/firefly-7b1-qlora-v0.1'
+device = 'cuda'
+input_pattern = '<s>{}</s>'
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    low_cpu_mem_usage=True,
+    torch_dtype=torch.float16,
+    device_map='auto'
+)
+model = PeftModel.from_pretrained(model, adapter_name)
+model.eval()
+model = model.to(device)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+text = input('User：')
+while True:
+    text = input_pattern.format(text)
+    input_ids = tokenizer(text, return_tensors="pt").input_ids
+    input_ids = input_ids.to(device)
+    outputs = model.generate(input_ids=input_ids, max_new_tokens=250, do_sample=True, top_p=0.75, temperature=0.35,
+                             repetition_penalty=1.2, eos_token_id=tokenizer.eos_token_id)
+    rets = tokenizer.batch_decode(outputs)
+    output = rets[0].strip().replace(text, "").replace('</s>', "")
+    print("Firefly：{}".format(output))
+    text = input('User：')
+```
+
+#### 3.生成效果
+
+下面的样例均为firefly-7b1-qlora-v0.1模型所生成，未经修改，仅供参考。
+
+多轮对话:
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p24.png" /> 
+</div>
+
+多轮对话2：
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p25.png" /> 
+</div>
+
+邮件生成：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p26.png" /> 
+</div>
+
+商品文案生成：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p27.png" /> 
+</div>
+
+医疗问答：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p28.png" /> 
+</div>
+
+创意性写作：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p29.png" /> 
+</div>
+
+其他例子：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-10/p30.png" /> 
+</div>
+
+#### 4.结语
+
+在本文中，我们介绍了QLoRA的基本原理，以及论文中一些比较重要的实验结论。并且使用QLoRA对bloom-7b1模型进行中文指令微调，获得了非常不错的效果。
+
+从firefly-7b1-qlora-v0.1的生成效果来看，虽然没有做定量的评测(对LLM做评测确实比较困难)，但就生成效果来看，丝毫不逊色于全量微调的firefly-2b6-v2。
+
+一些碎碎念：
++ 论文中表明QLoRA能够媲美全量参数微调的效果，虽然可能需要更丰富、多角度的实验进行验证，但如果【增大基座模型的参数量+QLoRA】能够优于【全量微调较小的模型】，也是非常有意义的。
++ 对基座模型进行量化压缩，通过增加adapter来弥补量化导致性能损失，是一个非常不错的idea，论文中的实验也证实了这一点。并且从我们的实践效果看来，确实惊艳，效果远胜LoRA。
++ 最后，如果你手边的训练资源不足，QLoRA非常值得一试。
+
 ------
 ------
 ## 11. 百川智能开源大模型
 
-
+<!-- https://mp.weixin.qq.com/s/L6r_iKnF2U4nTTKodcvPoA -->
+<!-- https://mp.weixin.qq.com/s/o4A5mEdEOEFWVQ_U651_tA -->
+<!-- https://mp.weixin.qq.com/s/XkoLnFycG1jPWrNT3w_p-g -->
 
 
 ------
@@ -4691,7 +5380,7 @@ Running on local URL:  http://0.0.0.0:7860
 
 ------
 ------
-## 13. Multimodal-GPT -->
+## 13. Multimodal-GPT
 <!-- https://github.com/open-mmlab/Multimodal-GPT -->
 
 
@@ -4714,13 +5403,337 @@ Running on local URL:  http://0.0.0.0:7860
 ------
 ## 14. 其他大模型微调算法：BitFit, AdaLoRA, MAM Adapter, UniPELT
 
-6-24
+### 1.BitFit
+
 <!-- https://mp.weixin.qq.com/s/2xHBE8c3hTClfAt93Z-4Rg -->
+
+#### 1.1 背景
+
+虽然对每个任务进行全量微调非常有效，但它也会为每个预训练任务生成一个独特的大型模型，这使得很难推断微调过程中发生了什么变化，也很难部署， 特别是随着任务数量的增加，很难维护。
+
+理想状况下，我们希望有一种满足以下条件的高效微调方法：
++ 到达能够匹配全量微调的效果。
++ 仅更改一小部分模型参数。
++ 使数据可以通过流的方式到达，而不是同时到达，便于高效的硬件部署。
++ 改变的参数在不同下游任务中是一致的。
+
+上述的问题取决于微调过程能多大程度引导新能力的学习以及暴露在预训练LM中学到的能力。
+
+虽然，之前的高效微调方法Adapter-Tuning、Diff-Pruning也能够部分满足上述的需求。但是，作者提出了一种参数量更小的稀疏的微调方法BitFit，来满足上述的需求。
+
+#### 1.2 技术原理
+
+BitFit（论文：BitFit: Simple Parameter-efficient Fine-tuning or Transformer-based Masked Language-models）是一种稀疏的微调方法，它训练时只更新bias的参数或者部分bias参数。
+
+对于Transformer模型而言，冻结大部分 transformer-encoder 参数，只更新bias参数跟特定任务的分类层参数。涉及到的bias参数有attention模块中计算query,key,value跟合并多个attention结果时涉及到的bias，MLP层中的bias，LayerNormalization层的bias参数。
+
+在`Bert-Base/Bert-Large`这种模型里，bias参数仅占模型全部参数量的`0.08%～0.09%`。但是通过在Bert-Large模型上基于GLUE数据集进行了 BitFit、Adapter和Diff-Pruning的效果对比发现，BitFit在参数量远小于Adapter、Diff-Pruning的情况下，效果与Adapter、Diff-Pruning想当，甚至在某些任务上略优于Adapter、Diff-Pruning。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p1.png" /> 
+</div>
+
+同时，通过实验结果还可以看出，BitFit微调结果相对全量参数微调而言, 只更新极少量参数的情况下，在多个数据集上都达到了不错的效果，虽不及全量参数微调，但是远超固定全部模型参数的Frozen方式。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p2.png" /> 
+</div>
+
+同时，通过对比BitFit训练前后的参数，发现很多bias参数并没有太多变化（例如：跟计算key所涉及到的bias参数）。发现计算query和将特征维度从N放大到4N的FFN层（intermediate）的bias参数变化最为明显，只更新这两类bias参数也能达到不错的效果，反之，固定其中任何一者，模型的效果都有较大损失。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p3.png" /> 
+</div>
+
+### 2.AdaLoRA
+
 <!-- https://mp.weixin.qq.com/s/N_N6RqKB9pjZ1tozfM5f5A -->
+#### 2.1 背景
+
+在NLP领域，对于下游任务进行大型预训练语言模型的微调已经成为一种重要的做法。一般而言，我们会采用对原有的预训练模型进行全量微调的方法来适配下游任务，但这种方法存在两个问题。
+
++ 训练阶段。对于预训练模型进行微调的时候，为了更新权重参数，需要大量的显存来存储参数的梯度和优化器信息，在当今预训练模型的参数变得越来越大的情况下，针对下游任务微调门槛变得越来越高。
++ 推理阶段。由于我们训练的时候是对于模型参数进行全量的更新，所以多个下游任务需要为每个任务维护一个大型模型的独立副本，这样就导致我们在实际应用的时候浪费了不必要的存储。
+
+为了解决这些问题，研究者提出了两个主要研究方向，以减少微调参数的数量，同时保持甚至提高预训练语言模型的性能。
+
++ **方向一：添加小型网络模块：**将小型网络模块添加到PLMs中，保持基础模型保持不变的情况下仅针对每个任务微调这些模块，可以用于所有任务。这样，只需引入和更新少量任务特定的参数，就可以适配下游的任务，大大提高了预训练模型的实用性。如：Adapter tuning、Prefix tuning、Prompt Tuning等，这类方法虽然大大减少了内存消耗。但是这些方法存在一些问题，比如：Adapter tuning引入了推理延时；Prefix tuning或Prompt tuning直接优化Prefix和Prompt是非单调的，比较难收敛，并且消耗了输入的token。
++ **方向二：下游任务增量更新：**对预训练权重的增量更新进行建模，而无需修改模型架构，即`W=W0+△W`。比如：Diff pruning、LoRA等， 此类方法可以达到与完全微调几乎相当的性能，但是也存在一些问题，比如：Diff pruning需要底层实现来加速非结构化稀疏矩阵的计算，不能直接使用现有的框架，训练过程中需要存储完整的∆W矩阵，相比于全量微调并没有降低计算成本。 LoRA则需要预先指定每个增量矩阵的秩 r 相同，忽略了在微调预训练模型时，权重矩阵的重要性在不同模块和层之间存在显著差异，并且只训练了Attention，没有训练FFN，事实上FFN更重要。
+
+基于以上问题进行总结：
++ 第一，我们不能预先指定矩阵的秩，需要动态更新增量矩阵的R，因为权重矩阵的重要性在不同模块和层之间存在显著差异。
++ 第二，需要找到更加重要的矩阵，分配更多的参数，裁剪不重要的矩阵。找到重要的矩阵，可以提升模型效果；而裁剪不重要的矩阵，可以降低参数计算量，降低模型效果差的风险。
+
+为了弥补这一差距，作者提出了AdaLoRA，它根据权重矩阵的重要性得分，在权重矩阵之间自适应地分配参数预算。
+
+#### 2.2 技术原理
+
+AdaLoRA（论文：ADAPTIVE BUDGET ALLOCATION FOR PARAMETEREFFICIENT FINE-TUNING），是对LoRA的一种改进，它根据重要性评分动态分配参数预算给权重矩阵。具体做法如下：
++ **调整增量矩分配**。AdaLoRA将关键的增量矩阵分配高秩以捕捉更精细和任务特定的信息，而将较不重要的矩阵的秩降低，以防止过拟合并节省计算预算。
++ **以奇异值分解的形式对增量更新进行参数化，并根据重要性指标裁剪掉不重要的奇异值，同时保留奇异向量**。由于对一个大矩阵进行精确SVD分解的计算消耗非常大，这种方法通过减少它们的参数预算来加速计算，同时，保留未来恢复的可能性并稳定训练。
+$$W=W^{(0)}+\detla=W^{(0)}+P\LambdaQ$$
++ **在训练损失中添加了额外的惩罚项**，以规范奇异矩阵P和Q的正交性，从而避免SVD的大量计算并稳定训练。
+
+通过实验证明，AdaLoRA 实现了在所有预算、所有数据集上与现有方法相比，性能更好或相当的水平。 例如，当参数预算为 0.3M 时，AdaLoRA 在RTE数据集上，比表现最佳的基线（Baseline）高 1.8%。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p4.png" /> 
+</div>
+
+### 3.MAM Adapter
+
 <!-- https://mp.weixin.qq.com/s/M2nds_FJBXooi08qDU-4yA -->
+#### 3.1 背景
+
+近年来提出了多种参数高效的迁移学习方法，这些方法仅微调少量（额外）参数即可获得强大的性能。虽然有效，但人们对为什么有效的关键要素以及各种高效微调方法之间的联系知之甚少。
+
+下图展示了不同的微调方法，在Xsum数据集上做英文文本摘要任务的效果（ROUGE-2是该任务的评价指标（越大越好））以及其他高效微调方法参数量相对于全参数微调参数量的百分比。图中的左上角的位置是理想化的方法。从图中发现，Adapter，Prefix Tuning和LoRA都是性能比较好的方法。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p5.png" /> 
+</div>
+
+为什么看起来Adapter、Prefix Tuning、LoRA（在结构上和公式上）都不太一样，尤其是Prefix Tuning，但是这三种方法有近似的效果？
+
+基于此，作者分解了当下最先进的参数高效迁移学习方法（Adapter、Prefix Tuning和LoRA）的设计，并提出了一种新方法MAM Adapter，一个在它们之间建立联系的统一框架。具体来说，将它们重新构建为对预训练模型中特定隐藏状态的修改，并定义一组设计维度，不同的方法沿着这些维度变化。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p6.png" /> 
+</div>
+
+首先，作者通过对Prefix Tuning变换，发现Prefix Tuning和Adapters的公式高度相似。
+
+然后，分析不同微调方法的内部结构和结构插入形式的相似之处。下图展示了高效微调方法Adapter、Prefix Tuning、LoRA以及新变体（通过更换一些元素，设计了前人的工作里没有的变体） Parallel Adapter、 Scaled PA的结构。  
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p7.png" /> 
+</div>
+
+下表展示了高效微调方法Adapter、Prefix Tuning、LoRA以及新变体在新增可训练参数结构形式（functional form）、结构插入形式（Insertion form）、新增结构在PLM修改的具体位置（modified representation）、新增结构与PLM的组合函数（composition function）。其中，新增可训练参数结构形式为需要学习的部分（注：Prefix Tuning为经过转换后的格式）；插入形式有串联或并联；模型修改的具体位置有Attention、FFN层。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p8.png" /> 
+</div>
+
+#### 3.2 技术原理
+
+MAM Adapter（论文：TOWARDS A UNIFIED VIEW OF PARAMETER-EFFICIENT TRANSFER LEARNING），一个在Adapter、Prefix Tuning和LoRA之间建立联系的统一方法。
+
+具体实现：
+
+作者对Adapter的放置和软提示（soft prompt）进行了详细的调查。得出如下结论：
+
++ 并行放置的Adapter优于顺序放置的Adapter，并且与 FFN 并行放置的Adapter优于多头注意力（MHA）并行放置的Adapter（模型修改的位置如下图中所示，蓝色表示修改Attention、红色表示修改FFN）。
++ 软提示可以通过仅更改 0.1% 的参数来有效地修改注意力。
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p9.png" /> 
+</div>
+
+然后，提出了“mix-and-match”（MAM）。 因此，**最终模型 MAM Adapter 是用 FFN 层的并行Adapter和软提示的组合**。
+
+通过最终的实验结果，可以看到 MAM Adapter 在仅用了6.7%参数量（相比全量微调）的情况下，在Xsum和MT这两个任务上达到了和全量微调相近的效果，并且该方法大大优于 BitFit 和 Prompt Tuning，并始终优于 LoRA、Adapter 和 Prefix Tuning。  
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p10.png" /> 
+</div>
+
+### 4.UniPELT
+
+#### 4.1 背景
+
+近年来，涌现出了许多针对语言模型的参数高效微调（PELT）方法，在模型训练参数极大的减少的情况下，模型效果与全量微调相当。但是不同的PELT方法在同一个任务上表现差异可能都非常大，这让针对特定任务选择合适的方法非常繁琐。
+
+基于此，作者提出了UniPELT方法，将不同的PELT方法作为子模块，并通过门控机制学习激活最适合当前数据或任务的方法。
+
+#### 4.2 技术原理
+
+UniPELT（论文： UNIPELT: A Unified Framework for Parameter-Efficient Language Model Tuning）是 LoRA、Prefix Tuning和Adapter的门控组合。
+
+更具体地说，LoRA 重新参数化用于 WQ 和 WV 注意力矩阵，Prefix Tuning应用于每一Transformer层的key和value，并在Transformer块的feed-forward子层之后添加Adapter。 对于每个模块，门控被实现为线性层，通过GP参数控制Prefix-tuning方法的开关，GL控制LoRA方法的开关，GA控制Adapter方法的开关。可训练参数包括 LoRA 矩阵 WA（Down）和WB（Up），提示调优参数Pk和Pv、Adapter参数和门函数权重。即图中蓝颜色的参数为可学习的参数。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p11.png" /> 
+</div>
+
+UniPELT 仅用 100 个示例就在低数据场景中展示了相对于单个 LoRA、Adapter 和 Prefix Tuning 方法的显著改进。在更高数据的场景中，UniPELT 的性能与这些方法相当或更好。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p12.png" /> 
+</div>
+
+实验还对不同 PELT 方法训练时间和推理时间进行了分析。
+
++ 从训练速度来看，UniPELT比之前微调的方法多一些，但是还在能接受的范围，
++ 从推理时间来看，BitFit方法增加的最少，UniPELT方法时间增加了27%。
++ 从训练参数量来看，LoRA，BitFit，Prefix-tuning都比较小，UniPELT参数量相对会多一些。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p13.png" /> 
+</div>
+
+总之，本方法始终优于常规的全量微调以及它在不同设置下包含的子模块，通常超过在每个任务中单独使用每个子模块的最佳性能的上限；并且，通过研究结果表明，多种 PELT 方法的混合涉及到PLM 的不同部分可能对模型有效性和鲁棒性都有好处。
+
+
+### 5.大模型高效微调技术最佳实践、总结
+
 <!-- https://mp.weixin.qq.com/s/P_AmTa4s8dOyc_0fZBgNPA -->
 
+之前对一些常见的高效微调技术进行了背景介绍及技术原理剖析，下面对每一种高效微调技术的特点进行简要的总结。
 
+**BitFit**
+
+对微调机制的一种积极探索，也很简单，通过仅调整bias效果就能有不错的效果，但没有具体阐述原理，就是通过猜测加实验得到的结果。同时，作者提出一个观点：微调的过程不是让模型适应另外的数据分布，而是让模型更好的应用出本身的表征能力。
+
+特点：
+
++ 训练参数量极小（约0.1%）。
++ 在大部分任务上效果会差于LoRA、Adapter等方法。
+
+**Prefix Tuning**
+
+在每一个Transformer层都带上一些virtual token作为前缀，以适应不同的任务。
+
+特点：
+
++ 前缀Token会占用序列长度，有一定的额外计算开销。
++ Prefix Tuning的线性插值是比较复杂的。
+
+**Prompt Tuning**
+
+该方法可以看着是Prefix Tuning的简化版本，针对不同的任务，仅在输入层引入virtual token形式的软提示（soft prompt）。
+
+特点：
+
++ 相对于Prefix Tuning，参与训练的参数量和改变的参数量更小，更节省显存。
++ 对一些简单的NLU 任务还不错，但对硬序列标记任务（即序列标注）表现欠佳。
+
+
+**P-Tuning**
+
+将Prompt转换为可以学习的Embedding层，并用MLP+LSTM的方式来对Prompt Embedding进行一层处理。相比Prefix Tuning，仅在输入层加入的可微的virtual token；另外，virtual token的位置也不一定是前缀，插入的位置是可选的。
+
+特点：
+
++ 引入一个prompt encoder（由一个双向的LSTM+两层MLP组成）来建模virtual token的相互依赖会收敛更快，效果更好。
+
+**P-Tuning v2**
+
+该方法在每一个Transformer层都加入了prompt token作为输入，引入多任务学习，针对不同任务采用不同的提示长度。并且回归传统的分类标签范式，而不是映射器。
+
+特点：
+
++ 解决了Prompt Tuning无法在小模型上有效提升的问题。
++ 移除了对模型效果改进较小的重参数化的编码器（如：Prefix Tuning中的MLP、P-Tuning中的LSTM）。
++ 对于一些复杂的硬序列标记任务（即序列标注）取得了不错的效果。
+
+**Adapter Tuning**
+
+该方法设计了Adapter结构，并将其嵌入Transformer的结构里面，针对每一个Transformer层，增加了两个Adapter结构，在训练时，固定住原来预训练模型的参数不变，只对新增的Adapter结构和Layer Norm 层进行微调。
+
+特点：
+
++ 通过在Transformer层中嵌入Adapter结构，在推理时会额外增加推理时长。
+
+**AdapterFusion**
+
+一种融合多任务信息的Adapter的变体，在 Adapter 的基础上进行优化，通过将学习过程分为两阶段来提升下游任务表现。
+
+**AdapterDrop**
+
+
+该方法在不影响任务性能的情况下，对Adapter动态高效的移除，尽可能的减少模型的参数量，提高模型在反向传播（训练）和正向传播（推理）时的效率。
+
+特点：
+
++ 通过从较低的 Transformer 层删除可变数量的Adaper来提升推理速度。 当对多个任务执行推理时，动态地减少了运行时的计算开销，并在很大程度上保持了任务性能。
+
+**LoRA**
+
+该方法通过低秩分解来模拟参数的改变量，从而以极小的参数量来实现大模型的间接训练。
+
+特点：
+
++ 将BA加到W上可以消除推理延迟。
++ 可以通过可插拔的形式切换到不同的任务。
++ 设计的比较好，简单且效果好。
+
+**AdaLoRA**
+
+对LoRA的一种改进，它根据重要性评分动态分配参数预算给权重矩阵，将关键的增量矩阵分配高秩以捕捉更精细和任务特定的信息，而将较不重要的矩阵的秩降低，以防止过拟合并节省计算预算。
+
+**QLoRA**
+
+使用一种新颖的高精度技术将预训练模型量化为 4 bit，然后添加一小组可学习的低秩适配器权重，这些权重通过量化权重的反向传播梯度进行微调。
+
+特点：
+
++ 使用 QLoRA 微调模型，可以显著降低对于显存的要求。同时，模型训练的速度会慢于LoRA。
+
+**MAM Adapter**
+
+一种在 Adapter、Prefix Tuning 和 LoRA 之间建立联系的统一方法。最终的模型 MAM Adapter 是用于 FFN 的并行 Adapter 和 软提示的组合。
+
+特点：
+
++ 整体上来说，最终的模型MAM Adapter效果会优于单个高效微调方法。
+
+**UniPELT**
+
+一种将不同的PELT方法LoRA、Prefix Tuning和Adapter作为子模块，并通过门控机制学习激活最适合当前数据或任务的方法。
+
+特点：
+
++ 相对于LoRA，BitFit，Prefix-tuning，训练的参数量更大；同时，推理更耗时；并且，输入会占用额外的序列长度。
++ 多种 PELT 方法的混合涉及PLM 的不同部分对模型有效性和鲁棒性都有好处。
+
+!> 多种不同的高效微调方法对比
+
+总的来说，像P-Tuning v2、LoRA等都是综合评估很不错的高效微调技术。如果显存资源有限可以考虑QLoRA；如果只是解决一些简单任务场景，可以考虑P-Tuning、Prompt Tuning也行。
+
+下表从参数高效方法类型、是否存储高效和内存高效、以及在减少反向传播成本和推理开销的计算高效五个维度比较了参数高效微调方法。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p14.png" /> 
+</div>
+
+下表展示了各种参数高效方法的参与训练的参数量、最终模型与原始模型的改变参数（delta值）以及论文中参与评估的模型的范围（<1B、<20B、>20B）。
+
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-11/p15.png" /> 
+</div>
+
+从表中可以看到，Prompt Tuning、Prefix Tuning、LoRA等少部分微调技术针对不同参数规模的模型进行过评估，同时，这几种方式也是目前应用比较多的高效微调方法。
+
+!> 当前高效微调技术存在的一些问题
+
+当前的高效微调技术很难在类似方法之间进行直接比较并评估它们的真实性能，主要的原因如下所示：
+
++ **参数计算口径不一致**：参数计算可以分为三类：可训练参数的数量、微调模型与原始模型相比改变的参数的数量、微调模型和原始模型之间差异的等级。例如，DiffPruning更新0.5%的参数，但是实际参与训练的参数量是200%。这为比较带来了困难。尽管可训练的参数量是最可靠的存储高效指标，但是也不完美。 Ladder-side Tuning使用一个单独的小网络，参数量高于LoRA或BitFit，但是因为反向传播不经过主网络，其消耗的内存反而更小。
++ **缺乏模型大小的考虑**：已有工作表明，大模型在微调中需要更新的参数量更小（无论是以百分比相对而论还是以绝对数量而论），因此（基）模型大小在比较不同PEFT方法时也要考虑到。
++ **缺乏测量基准和评价标准**：不同方法所使用的的模型/数据集组合都不一样，评价指标也不一样，难以得到有意义的结论。
++ **代码实现可读性差**：很多开源代码都是简单拷贝Transformer代码库，然后进行小修小补。这些拷贝也不使用git fork，难以找出改了哪里。即便是能找到，可复用性也比较差（通常指定某个Transformer版本，没有说明如何脱离已有代码库复用这些方法）。
+
+!> 高效微调技术最佳实践
+
+针对以上存在的问题，研究高效微调技术时，建议按照最佳实践进行实施：
+
++ 明确指出参数数量类型。
++ 使用不同大小的模型进行评估。
++ 和类似方法进行比较。
++ 标准化PEFT测量基准。
++ 重视代码清晰度，以最小化进行实现。
+
+**总结**
+
+本文针对之前介绍的几种参数高效微调方法进行了简单的概述，主要有如下几类：
+
++ 增加额外参数，如：Prefix Tuning、Prompt Tuning、Adapter Tuning及其变体。
++ 选取一部分参数更新，如：BitFit。
++ 引入重参数化，如：LoRA、AdaLoRA、QLoRA。
++ 混合高效微调，如：MAM Adapter、UniPELT。
+
+并比较了不同的高效微调方法之间的差异；同时，还指出当前大多数高效微调方法存在的一些问题并给出了最佳实践。
 
 
 ## 15. LLM的预训练策略和模型并行策略
