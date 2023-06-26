@@ -5366,12 +5366,166 @@ while True:
 
 ------
 ------
-## 11. 百川智能开源大模型
+## 11. baichuan-7B 和 Aquila-7B
 
 <!-- https://mp.weixin.qq.com/s/L6r_iKnF2U4nTTKodcvPoA -->
 <!-- https://mp.weixin.qq.com/s/o4A5mEdEOEFWVQ_U651_tA -->
 <!-- https://mp.weixin.qq.com/s/XkoLnFycG1jPWrNT3w_p-g -->
 
+
+!> 源码: https://github.com/baichuan-inc/baichuan-7B
+
+!> 模型: https://huggingface.co/baichuan-inc/baichuan-7B
+ 
+!> https://modelscope.cn/models/baichuan-inc/baichuan-7B/summary
+
+
+近期2大国产可商用大模型推介：baichuan-7B及AquilaChat-7B模型的数据、结构以及所需成本介绍
+
+最近百亿参数模型受到广泛关注。本文主要介绍baichuan-7B大模型以及AquilaChat-7B两个最近的可商用模型，以其开源项目源码、issue、项目介绍等信息为基础，进行介绍。
+其中，我们重点关注训练数据、模型结构（重点优化点）、运行资源、是否可以商用以及实际评估等几个方面的内容，这有利于我们沉淀出大模型训练的一些经验。
+
+
+### 11.1 baichuan-7B大模型及其评估
+
+baichuan-7B是由百川智能开发的一个开源可商用的大规模预训练语言模型。
+
+基于Transformer结构，在大约1.2万亿tokens上训练的70亿参数模型，支持中英双语，上下文窗口长度为4096。baichuan-7B 支持商用。在32G V100上跑推理，大约占用28G显存。根据issue的现实，目前开源了的是pretrain版本。
+
+**1、训练数据**
+
+原始数据包括开源的中英文数据和自行抓取的中文互联网数据，以及部分高质量知识性数据。
+
+在数据处理上，基于启发式规则和质量模型打分，对原始数据集进行篇章和句子粒度的过滤。在全量数据上，利用局部敏感哈希方法，对篇章和句子粒度做过滤去重。
+
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-12/p1.png" /> 
+</div>
+
++ 经过不断的调整和多轮测试，最终确认了一个在下游任务上表现最好的中英文配比。
++ 我们使用了一个基于自动学习的数据权重策略，对不同类别的数据进行配比
+
+**2、tokenizer(分词)**
+
+我们参考学术界方案使用 SentencePiece 中的 Byte-Pair Encoding (BPE) 作为分词算法，并且进行了以下的优化：
+
+1. 目前大部分开源模型主要基于英文优化，因此对中文语料存在效率较低的问题。我们使用 2000 万条以中英为主的多语言语料训练分词模型，显著提升对于中文的压缩率。
+2. 对于数学领域，我们参考了 LLaMA 和 Galactica 中的方案，对数字的每一位单独分开，避免出现数字不一致的问题，对于提升数学能力有重要帮助。
+3. 对于罕见字词（如特殊符号等），支持 UTF-8 characters 的 byte 编码，因此做到未知字词的全覆盖。
+4. 我们分析了不同分词器对语料的压缩率，如下表，可见我们的分词器明显优于 LLaMA, Falcon 等开源模型，并且对比其他中文分词器在压缩率相当的情况下，训练和推理效率更高。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-12/p2.png" /> 
+</div>
+
+**3、模型结构**
+
+整体模型基于标准的 Transformer 结构，我们采用了和 LLaMA 一样的模型设计
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-12/p3.png" /> 
+</div>
+
+
+并从位置编码、激活层、前馈层、Layer-Normalization等进行了优化：
+1) 位置编码，采用[rotary-embedding](https://zhuanlan.zhihu.com/p/359502624)，这一现阶段被大多模型采用的位置编码方案，具有更好的外延效果。
+
+2) 激活层，采用SwiGLU；
+
+3) Feedforward，变化为8/3倍的隐含层大小；
+4) Layer-Normalization，layer normalization 重要的两个部分是平移不变性和缩放不变性，儿大语言模型训练很重要的一点就是提升训练的稳定性，为了提升训练稳定性，GPT3、PaLM、BLOOM、OPT等大语言模型都采用了pre layernorm。
+
++ post layernorm。在原始的transformer中，layer normalization是放在残差连接之后的，称为postLN。使用PostLN的深层transformer模型容易出现训练不稳定的问题，postLN随着transformer层数的加深，梯度范数逐渐增大，导致了训练的不稳定性。
++ pre layernorm。改变layer normalization的位置，将其放在残差连接的过程中，self-attention或FFN块之前，称为“PreLN”，Pre layer norm在每个transformer层的梯度范数近似相等，有利于提升训练稳定性。相比于postLN，使用preLN的深层transformer训练更稳定，可以缓解训练不稳定问题，但preLN可能会轻微影响transformer模型的性能。
+5) LayerNorm替换为RMSNorm。
+
+**4、训练稳定性和吞吐**
+
+我们在原本的 LLaMA 框架上进行诸多修改以提升训练时的吞吐，具体包括：
+
+1. 算子优化技术：采用更高效算子，如 Flash-Attention，NVIDIA apex 的 RMSNorm 等。
+2. 算子切分技术：将部分计算算子进行切分，减小内存峰值。
+3. 混合精度技术：降低在不损失模型精度的情况下加速计算过程。
+4. 训练容灾技术：训练平台和训练框架联合优化，IaaS + PaaS 实现分钟级的故障定位和任务恢复。
+5. 通信优化技术，具体包括：
+    - 采用拓扑感知的集合通信算法，避免网络拥塞问题，提高通信效率。
+    - 根据卡数自适应设置 bucket size，提高带宽利用率。
+    - 根据模型和集群环境，调优通信原语的触发时机，从而将计算和通信重叠。
+
+基于上述的几个优化技术，我们在千卡 A800 显卡上达到了 7B 模型 182 TFLOPS 的吞吐，GPU 峰值算力利用率高达 58.3%。
+
+最终的loss如下图：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-12/p4.png" /> 
+</div>
+
+**5、民间评测**
+
+issue:https://github.com/baichuan-inc/baichuan-7B/issues/51 对该模型进行了对比评测(https://baichuan-vicuna-eval.pleisto.app/ )，使用FastChat的评估集由GPT4进行打分。
+
+考虑到baichuan-vicuna-7b主要是用ShareGPT数据集做的训练，中文数据占比相对较小，因此直接拿FastChat的英文评估集进行评测，并和同样基于ShareGPT数据集训练的LLaMAVicuna13B进行横向对比。
+
+打分数据如下：
+
+1) 写作任务：baichuan-vicuna-7b：8.5 Vllama-vicuna-13b：9.05
+2) 角色扮演任务：baichuan-vicuna-7b：7.5VSllama-vicuna-13b：9.1
+3) 常识知识：baichuan-vicuna-7b：8.9VSllama-vicuna-13b：8.85
+4) 费米问题：baichuan-vicuna-7b：4.8VSllama-vicuna-13b：8
+5) 反常识问题：baichuan-vicuna-7b：7.7VSllama-vicuna-13b：8.9
+6) 编程：baichuan-vicuna-7b：4.36VSllama-vicuna-13b：4
+7) 数学：baichuan-vicuna-7b：3.33VSllama-vicuna-13b：3.67
+8) 一般性开放问答：baichuan-vicuna-7b：8.7VSllama-vicuna-13b：8.65
+9) 专业知识：baichuan-vicuna-7b：8.5 VSllama-vicuna-13b：8.85
+
+结论如下：
+
+1) 在10个任务中，llama-vicuna-13b在7个任务上的表现优于baichuan-vicuna-7b（写作任务、角色扮演任务、费米问题、反常识问题、编程、数学和专业知识），而baichuan-vicuna-7b在3个任务上的表现优于llama-vicuna-13b（常识知识、一般性开放问答和编程任务）。
+2) llama-vicuna-13b的表现更优，因为其在更多任务中的平均得分高于baichuan-vicuna-7b。然而，根据提供的数据，可以看出，两个模型在某些任务上的表现相当接近，例如常识知识、一般性开放问答和专业知识。llama-vicuna-13b在费米问题、反常识问题和角色扮演任务上的表现显著优于baichuan-vicuna-7b，而baichuan-vicuna-7b在编程任务上的表现略优于llama-vicuna-13b。
+3) 考虑到baichuan-vicuna-7b（7B参数）和llama-vicuna-13b（13B参数）之间的参数量差异，需要重新评估它们的性能。一般来说，参数量较大的模型在性能上可能更好，但同时计算资源消耗也更高，因此在实际应用中需要权衡。
+4) 由于在上述10个任务中，模型B在7个任务上的表现优于baichuan-vicuna-7b，而baichuan-vicuna-7b在3个任务上的表现优于llama-vicuna-13b。尽管llama-vicuna-13b在多数任务中表现较好，但在某些任务上，如常识知识、一般性开放问答和编程任务，两者的表现相差不大。这意味着在这些任务中，baichuan-vicuna-7b在性价比方面可能更具优势。
+5) 对于不同的应用场景，可以根据以下建议选择合适的模型：
+
+如果计算资源充足，且需要在各个任务上都获得较好的性能，可以选择参数量较大的模型；
+
+如果计算资源有限，或者需要在特定任务（如常识知识、一般性开放问答和编程任务）上优化性价比，可以考虑选择参数量较小的baichuan-vicuna-7b；
+
+对于费米问题、反常识问题和角色扮演任务等，llama-vicuna-13b具有明显优势，因此在这些任务上可以优先考虑llama-vicuna-13b；
+
+**6、衍生微调实现**
+
+https://github.com/jianzhnie/Efficient-Tuning-LLMs 项目实现了百川模型的低资源量化训练和部署， LoRA微调可在单块3090GPU上运行，同时支持QLoRA方法，最低8G显存。
+
+### 11.2 AquilaChat-7B
+
+AquilaChat-7B模型由智源研究院研发，AquilaChat-7B是在Aquila-7B模型的基础上，进行SFT微调后的支持中英双语的对话式语言模型。
+
+运行Aquila-7B系列需要内存30G, 显存18G， 生成最大长度2048tokens。
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-12/p5.png" /> 
+</div>
+
+**1、训练数据**
+
+暂未公开，只知道是中英双语。
+
+**2、tokenizer**
+
+Aquila模型所采用的tokenizer支持中英双语。在处理英文、中文以及代码数据时，采用了不同的分词器对一万个样本进行了抽取，对比结论如下：
+
+<div align=center>
+    <img src="zh-cn/img/ch2/4-12/p6.png" /> 
+</div>
+
+可以看到，Aquila模型词表较大，为10W级别， 采用bpe方式进行切分。
+
+**3、模型结构**
+
+借鉴了GPT-3, LLaMA的架构设计
+
+地址：https://github.com/FlagAI-Open/FlagAI/tree/master/examples/Aquila/Aquila-chat
 
 ------
 ------
