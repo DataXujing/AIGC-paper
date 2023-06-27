@@ -3,6 +3,8 @@
 <!-- chatGLM,MINIGPT-4, LLaMa, alpaca，本草，langChian-->
 <!-- 下载GPT-4, InstrcutGPT,还有这些大模型的paper -->
 
+<!-- DocterGLM https://zhuanlan.zhihu.com/p/627269023 -->
+
 
 ## 1.GLM
 
@@ -5527,14 +5529,14 @@ Aquila模型所采用的tokenizer支持中英双语。在处理英文、中文�
 
 地址：https://github.com/FlagAI-Open/FlagAI/tree/master/examples/Aquila/Aquila-chat
 
+<!-- ------
 ------
-------
-## 12. MedicalGPT
+## 12. MedicalGPT -->
 
 
+<!-- ------
 ------
-------
-## 13. Multimodal-GPT
+## 13. Multimodal-GPT -->
 <!-- https://github.com/open-mmlab/Multimodal-GPT -->
 
 
