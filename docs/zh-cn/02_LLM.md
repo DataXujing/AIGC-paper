@@ -5892,7 +5892,14 @@ UniPELT 仅用 100 个示例就在低数据场景中展示了相对于单个 LoR
 并比较了不同的高效微调方法之间的差异；同时，还指出当前大多数高效微调方法存在的一些问题并给出了最佳实践。
 
 
+!> TODO: GLoRA: https://mp.weixin.qq.com/s/irt3K4mwmG1ywTaPa4WoXw
+
+
 ## 15. LLM的预训练策略和模型并行策略
+<!-- https://zhuanlan.zhihu.com/p/611325149 -->
+<!-- https://zhuanlan.zhihu.com/p/609795142 -->
+
+<!-- https://zhuanlan.zhihu.com/p/624589622?utm_id=0 -->
 
 TODO
 
