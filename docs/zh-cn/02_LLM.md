@@ -5901,6 +5901,11 @@ UniPELT 仅用 100 个示例就在低数据场景中展示了相对于单个 LoR
 
 <!-- https://zhuanlan.zhihu.com/p/624589622?utm_id=0 -->
 
+<!-- https://www.bilibili.com/video/BV16N411K7aT?p=1&vd_source=def8c63d9c5f9bf987870bf827bfcb3d -->
+<!-- https://www.bilibili.com/video/ -->
+
+<!-- https://www.bilibili.com/video/BV14c411J7f2/?spm_id_from=333.337.search-card.all.click&vd_source=def8c63d9c5f9bf987870bf827bfcb3dBV1BX4y1s7oZ/?spm_id_from=333.337.search-card.all.click&vd_source=def8c63d9c5f9bf987870bf827bfcb3d -->
+
 TODO
 
 ## 16. langchain
