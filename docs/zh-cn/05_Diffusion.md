@@ -2112,15 +2112,525 @@ instruct-pix2pix这个工作基于GPT-3和prompt-to-prompt构建了pair的数据
 
 ### 3.项目实战：文本生成实战
 
+这部分介绍stable diffusion常用的微调方法，并基于太乙stable diffusion实现文本生成图片的实战，其实可以非常容易的迁移到图片生成图片，图片inpainting等任务。
 
+下面我们将详细介绍stable diffusion中的微调方法：DreamBooth,LoRA,textual inversion,hypernetwork和LyCORIS。
+
+<!-- https://zhuanlan.zhihu.com/p/619348969 -->
+
+<!-- https://zhuanlan.zhihu.com/p/615739257 -->
+
+<!-- https://zhuanlan.zhihu.com/p/631370055 -->
+
+<!-- 太乙：https://zhuanlan.zhihu.com/p/580103864 -->
+
+<!-- https://zhuanlan.zhihu.com/p/580966411 -->
+
+<!-- 
 ### 4.项目实战：图片生成图片
-
-
 ### 5.项目实战：图片inpainting
-
-
-
 ### 6.项目实战：使用controlnet辅助生成图片
+ -->
+
+
+#### 3.1 DreamBooth:Fine Tuning Text-to-Image Diffusion Models for Subject-Driven Generation
+ 
+ <!-- https://zhuanlan.zhihu.com/p/615739257 -->
+ <!-- https://zhuanlan.zhihu.com/p/620577688 -->
+ <!-- https://mp.weixin.qq.com/s/NE3Gkr64G3XADVdujtzRXw -->
+
+ <!-- https://zhuanlan.zhihu.com/p/615739257 -->
+ <!-- https://zhuanlan.zhihu.com/p/630754310 -->
+
+!> arxiv: https://arxiv.org/abs/2208.12242
+
+!> github: https://github.com/XavierXiao/Dreambooth-Stable-Diffusion
+
+**1. 简述**
+
+现在的文图生成模型参数规模已经达到了数十亿甚至数百亿的量级，通过输入文本Prompt描述，可合成质量高，多样化的图片。但是这种图片缺乏对特定物体的精确在现能力，特别是对个人定制的物体，很难实现个人物体在风格、造型等方面的实现能力。
+
+对此，Google团队提出一种文图模型生成内容的"定制化"能力，通过一种基于new autogenous class-specific prior preservation loss的微调策略，训练少量几张需要定制化物体的图片，实现该生成物体在风格上、背景等多样化的再创造，在保持物体特征不变的前提下，光照、姿势、视角以及背景等内容可以自定义。如下图所示，输入4张柯基的照片，可是保持柯基的外貌特征不变的前提下，将其背景改为Acropolis，或者狗窝、水里等。画面看上去充满了创意。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p1.png" /> 
+</div><p align=center>Figure 1: With just a few images (typically 3-5) of a subject (left), DreamBooth—our AI-powered photo booth—can generate a myriad of images of the subject in different contexts (right)</p>
+
+Dreambooth将希望个性化目标内容（例如：图中的柯基狗）绑定到一个新词`[V]`上，实现精准的生成目标内容。通俗理解为：通过prompt无法精准的定位视觉生成空间中的目标柯基，只能在dog这个类(CLASS)里面，带有随机性的生成各种各样的狗，即使prompt描述的非常精细，也无法与视觉空间形成精准的对应，如果在目标柯基的视觉位置上放置一个精准定位词`[V]`，就像是在目标位置放置一个GPS，这样就可以从茫茫的狗群里面精准定位到柯基。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p2.png" /> 
+</div><p align=center> Dreambooth通俗理解示意图</p>
+
+ 
+该方案主要贡献有两点：
+
++ 通过少量参考图，可以精确的控制个性化内容生成，并且在保留个性化内容的关键特征的同时，对内容的风格创意和形式合成方面的具备较好的泛化性。
++ 利用few-shot的方式对原模型进行微调时，提出一种正则损失来保留模型的先验知识，也能精准的生成目标内容。
+
+**2. 具体方案**
+
+本文选用的Cascaded文图生成模型Imagen（Cascaded Text-to-Image Diffusion Models，Google王者归来Imagen）采用的是典型的两段式结构模型，即：
+
+1. 先根据描述文本Prompt生成low-resolution的图片，
+2. 在根据low-resolution图生成high-resolution图（即Imagen中的Super-resolution模型）。
+
+训练的过程也是分为两个夹阶段：
+
+**第一阶段：**先根据训练图片集（一般为3~5张）和描述文本（带有`[V]`标识，例如：A `[V]` dog），去训练low-resolution的生成模型。由于训练数据少，模型参数量大，极容易产生overfitting，另外模型对标识符`[V]`是没有先验知识的，所以也容易产生language drift，为此提出一种正则损失函数：autogenous, class-specific prior preservation loss，这个损失函数既可以保留模型对目标class的先验知识，也可以将目标准确的圈定在class内的确定视觉空间中，如Figure4中的第一阶段。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p3.png" /> 
+</div><p align=center>autogenous, class-specific prior preservation loss</p>
+
+**第二阶段：**将训练集中的图片组成`<low-resolution, high resolution>`样本对，去finetune Imagen中的SR部分模型，使得最终能够生成目标内容的更多细节，如Figure4中的第二阶段。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p4.png" /> 
+</div><p align=center>Figure 4: Fine-tuning.</p>
+
+Dreambooth的主要思路就是通过以上两个阶段的训练来实现。其中有几个细节点需要展开：
+
+
+!> 2.1 如何构建[V]，为什么需要[V]？
+
+`[V]`是一个GPS定位器（文中比喻为indentifier），为了保证不与先验知识中其他的词在语义上冲突，构建时需要尽可能唯一性，建议用生僻词（不建议随便通过字母和数字构建，如"xxy5syt00"，因为在通过tokenizer分词之后，可能会出现具有较强先验的词，可以使用`T5-XXL`中tokenizer词表`5000~10000`范围内的`1~3`个token进行组合）。`[V]`告诉生成模型，在class的范围内，目标内容的具体"位置信息"，使得生成模型可以精准的生成目标内容。
+
+!> 2.2 如何解决Overfitting和Language drift的问题？
+
+用少量的训练样本，采用denoising loss对大模型进行微调的方式，不可避免出现Overfitting和Language-drift的问题。对于Overfitting的问题，常用的方式是添加正则、固定部分参数、dropout等，但是实际上无法知晓模型各部分参数具体在生成过程中所起到的作用。对与Language drift问题，由于大模型是用非常大的各类数据集进行训练的，微调时却使用非常小的数据，很容易造成`知识的遗忘`。如果在训练集的文本中制定微调的范围，即CLASS，则可以缓解这种遗忘。
+
+对应以上问题，Dreambooth提出一种Prior-Preservation Loss：
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p5.png" /> 
+</div>
+
+其中$\tilde{x}_ {\theta}(\alpha_t x+\sigma_t \epsilon,c)-x$,
+部分是训练模型学习输入的少量样本。$\tilde{x}_ {\theta}(\alpha_{t^{'}} x_{pr}+\sigma_{t^{'}} \epsilon^{'},c_{pr})-x_{pr}$
+部分则是训练原模型自己生成的样本，防止模型的知识遗忘。通过上述Preservation Loss，Google通过实验验证了其能较好的解决Overfitting和Language-drift问题。
+
+**3. 实验结果**
+
+在开头就已经强调了本文的两个重要贡献，其中"对内容的风格创意和形式合成方面的具备较好的泛化性"，看起来有点不太清晰，具体体现在哪些方面效果上呢？结合文章的实验部分具体从一下几方面进行效果展示：
+
+!> 3.1 Recontextualization个性化内容的重构效果
+
+个性化内容重构能力是微调的最基本要求了。通过输入带有`[V]`和`CLASS`标识的Prompt，输入到微调后的模型中，可以生成与训练集中内容相同的目标，例如下图中训练集中红色款式的书包，可以直接进行生成，生成的书包基本还原了训练集的效果，包括细小的小装饰物。另外还可以向Prompt中添加背景修饰。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p6.png" /> 
+</div><p align=center>Figure 5: Recontextualization of a backpack, vase, and teapot subject instances.</p>
+
+!> 3.2 Art Renditions 艺术渲染效果
+
+进一步验证微调后的效果，还验证了对目标图中的内容进行各种艺术效果的改变，例如`"a [V] [class noun] in the style of [famous sculptor]"`中将famous sculptor分别改为"Vincent Van Gogh"等，最终图中内容呈现了对用的艺术形式。并且风格与内容看起来和谐，同时又保留了内容的主要特征。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p7.png" /> 
+</div><p align=center>Figure 6: Artistic renderings of a dog instance in the style of famous painters.</p>
+
+!> 3.3 Expression Manipulation 表述的可控效果
+
+为了验证模型确实是理解了图中的内容，还验证了训练集中不存在的知识表达，例如下图中的dog分别进行不同的表情效果，这类表情在原图中是不具备的，模型的生成结果是建立在准确捕捉到训练集中的内容以及控制生成文本的表述意图。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p8.png" /> 
+</div><p align=center>Figure 7: Expression manipulation of a dog instance.</p>
+
+!> 3.4 Novel View Synthesis 多视角合成效果
+
+不仅对局部内容进行理解和生成，也对整体形态进行了理解和生成。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p9.png" /> 
+</div><p align=center>Figure 8: Text-guided view synthesis.</p>
+
+!> 3.5 Accessorization 外观装饰效果
+
+另外还验证了与大模型知识中学习到的内容进行融合交互，展示了模型的创新能力。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p10.png" /> 
+</div><p align=center>Figure 9: Outfitting a dog with accessories.</p>
+
+!> 3.6 Property Modification 属性编辑效果
+
+最后验证了模型对图中内容的某类属性的理解和创新生成。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/5-1/p11.png" /> 
+</div><p align=center>Figure 10: Modification of subject properties while preserving their key features.</p>
+
+#### 3.2 LoRA:LOW-RANK ADAPTATION OF LARGE LANGUAGE MODELS
+<!-- https://zhuanlan.zhihu.com/p/627133491 -->
+!> arxiv:https://arxiv.org/abs/2106.09685v2 
+
+!> github:https://github.com/microsoft/LoRA
+
+**1. 简述**
+
+这两年大火的AIGC领域中的LLM和AI绘画都是基于超大参数量的模型和超大训练数据。各领域为了跟上技术的发展，也积极投身于领域模型定制化训练，但是训练大模型需要巨大的投入，一般中小企业很难承担的起。例如175Billion参数量的GPT-3，据非权威信息GPT3的一次训练成本为140万美元，更何况这种超大模型的训练难度加上试错成本就决定了这只能是头部大公司玩得起的。
+
+不过，微软提出了一种低秩自适应训练方式Low-Rank Adaptation, Lora，该方式固定预训练模型，往模型中添加少量可训练的tensor矩阵，通过对该部分可训练的参数，实现对整个模型输出效果的定制化。通过这种方式需要训练的参数量只有原模型的1/1000甚至1/10000，并且也大大缩小了训练时长，从根本上解决了中小企业训练大模型难的问题。
+
+举个例子，如下图：
+<div align=center>
+    <img src="zh-cn/img/ch5/6-1/p1.png" /> 
+</div><p align=center>Figure 1: Our reparametrization. We only train A and B.</p>
+
+原模型的训练需要训练$W$ ，Lora的方式则是保持$W$不变，只训练$A$和$B$,由于$A*B=W^{'}$ 得到的 
+$W^{'}$维度大小与$W$相同，训练时输入分别与$W^{'}$和$W$进行计算，然后将输出相加，反向获取的梯度只用于更新$A$和$B$。推理阶段前则直接将$W^{'}$和$W$相加，然后替换$W$，这样整个推理流程和参数计算量没有发生变化。
+
+总的来说Lora的主要优点有：
+
++ 训练前后预训练模型保持不变，Lora可以看作为"插件"，可以添加、删除，以及替换，操作容易，资源占用少。
++ 训练效率高，只需要训练Lora部分，参数量小，且硬件要求不高。
++ 训练后将Lora添加到原模型中，推理速度不受影响，保持不变。
++ 可多个Lora进行叠加，具备融合效果。
+
+**2. 具体方案**
+
+!> 2.1 用低秩矩阵代替全秩矩阵
+
+LoRA的方案可以应用在多种结构的神经网络模型中，用低秩的$A$和$B$点乘替代原模型dense layer结构中的full-ranked weight matrices，减少模型训练的参数量，进而可用于低成本微调大模型。文章中有一段话奠定了该方案的理论基础：
+
+> "Aghajanyan et al. (2020) shows that the pre-trained language models have a low “instrisic dimension” and can still learn efficiently despite a random projection to a smaller subspace."
+
+理论上解释了使用低秩的参数可以使得大模型学习到，对任意smaller subspace的投影。即让大模型通过少量的样本，学习到样本的特征子空间。
+
+!> 2.2 对原模型训练的影响
+
+由于LoRA在微调完成之后，是直接与原模型中的权重矩阵相加，并未带来额外的参数量，所以推理的速度不受影响。训练阶段，只需要训练LoRA的参数，原模型参数不变，并且在计算梯度的时候无需对保存原模型参数的梯度变量，所以训练所需要的显存也小于全参数微调，另外LoRA中控制秩的参数$r$越小，占用的资源和训练收敛的越快。相反,$r$如果与全秩相同，那其实就接近原模型的微调了。
+
+!> 2.3 向Transformer模型中添加LoRA
+
+Transformer的模型结构主要包括了Attention、MLP和Norm几部分，其中Attention的计算公式中有3个矩阵参数WQ/WK/WV，将Lora应用在该部分如下图：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/6-1/p2.png" /> 
+</div><p align=center>APPLYING LORA TO TRANSFORMER</p>
+
+替换Attention中WQ/WK/WV矩阵，由此实现对Q/K/V生成的训练，最后完成原模型的效果微调。同时，微调过程中大概能减少2/3的显存（使用Adam优化器，大概是因为Adam在训练中包括了gradients和Adam states）。另外训练完成之后LoRA部分的模型大小也只有几十MB，训练的效率也有25%的提升。
+
+至于为什么将LoRA应用在Transformer中该部分，其实文章也是经过消融对比实验得出的最佳方式：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/6-1/p3.png" /> 
+</div><p align=center>Table 5: Validation accuracy on WikiSQL and MultiNLI after applying LoRA to different types of attention weights in GPT-3, given the same number of trainable parameters.</p>
+
+在相同LoRA参数量的前提下，针对self-attention中的WQ/WK/WV矩阵（W0是multi-head中的矩阵，这里不展开了）进行LoRA替换是最佳的方案。
+
+**3. 实验结果**
+
+本文分别在RoBERTa、DeBERTa和GPT2模型上验证LoRA微调方案在多种NLP任务上的效果。可以发现，LoRA在对比有着相同训练参数量时，在各类任务上都要比RoBERTa、DeBERTa的Adaption的方式要好，相比全参数微调FT的效果，LoRA也能够咋部分任务上表现略高，整体上与FT相当
+
+<div align=center>
+    <img src="zh-cn/img/ch5/6-1/p4.png" /> 
+</div><p align=center>Table 2: RoBERTabase, RoBERTalarge, and DeBERTaXXL with different adaptation methods on the GLUE benchmark.</p>
+
+另外对比了常见大模型微调的方案，"BitFit"， "Prefix-embedding tuning"，"Prefix-layer tuning"和花式"Adapter tuning"。在GPT2上的个任务微调结果，具体为：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/6-1/p5.png" /> 
+</div><p align=center>Table 3: GPT-2 medium (M) and large (L) with different adaptation methods on the E2E NLG Challenge.</p>
+
+可以发现LoRA的微调方式不仅是参数量最小的，也是在多种任务上效果最好的。
+另外对于LoRA中仅有的超参r，文章也给出了对比实验的结果，如下：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/6-1/p6.png" /> 
+</div><p align=center>Table 6: Validation accuracy on WikiSQL and MultiNLI with different rank r.</p>
+
+LoRA的大模型方式，不仅在LLM的微调中也比较常见,也在AI绘画Stable Diffusino模型中应用很广，，所以熟练使用LoRA对大模型进行微调还是很有必要亲自实践下的。
+
+#### 3.3 Textual Inversion(Embedding), HyperNetwork和Aesthetic Gradients
+<!-- textual inversion: https://zhuanlan.zhihu.com/p/622280974 -->
+<!-- https://zhuanlan.zhihu.com/p/620570659 -->
+
+##### 3.3.1 Textual Inversion
+<!-- https://zhuanlan.zhihu.com/p/632867668 -->
+
+!> arxiv: https://arxiv.org/abs/2208.01618v1
+
+!> github: https://github.com/rinongal/textual_inversion
+
+**1. 简述**
+
+AI绘画模型具备非常强大的生成能力，可以根据任意文本描述生成指定的内容，并在在风格、构图、场景等方面具备很强的创造性。但是如果生成具备某种唯一特征的内容，则很难通过文本描述来生成。对此Nvidia团队提出一种AI绘画模型微调方案Textual Inversion，可以实现微调带有目标内容的3~5张图片，进而使得模型能够准确学会该目标的唯一特征，并且还可以与为改内容合成新的背景、风格等。例如下图：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p1.png" /> 
+</div><p align=center>Figure 1: Examples</p>
+
+输入几张训练样本，并且用特定的词$S_{*}$ 来表示该内容，通过训练之后，在文本中添加$S_{*}$ 及其他描述，即可生成不同风格以及不同造型的目标内容。**该训练过程中模型的参数保持不变，只微调特定词$S_{*}$ 对应的embedding向量**，如下图所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p2.png" /> 
+</div><p align=center>Figure 2: Outline of the text-embedding and inversion process.</p>
+
+训练过程中，在文本编码器部分，$S_{*}$ 分词之后的token通过embedding look-up table映射为特征向量$v_{*}$ 与文本中其他部分一同嵌入到Unet模型中进行图片引导生成，通过重构目标计算梯度回传到embedding部分来更新$v_{*}$ 对应的embeding向量。
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p3.png" /> 
+</div>
+
+这个逆向的将目标的特征微调到文本embedding中也对应的该方案的名字Textual Inversion。该方案不仅能到特定的物体比如Figure1中的雕像，也可以用在人物、风格等场景下，并且多个训练后的embedding合一叠加使用，例如下图：
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p4.png" /> 
+</div><p align=center>Figure 7: Compositional generation using two learned pseudo-words.</p>
+
+该图训练了一种风格$S_{style}$以及三个特定的物体$S_{clock},S_{cat},S_{crasft}$ 
+ ，并且分别将三种物体与该风格结合，生成看制定风格的特定内容.
+
+**2. 具体方案**
+
+本方案可行的依据是微调训练的embedding可以足够表示目标特征的语义信息，原文如下：
+
+> Prior work has shown that this embedding space is expressive enough to capture basic image semantics (Cohen et al., 2022; Tsimpoukelli et al., 2021).
+> 
+与LoRA、Dreambooth相比，该方案需要微调的参数量最小，训练数据最少（对于较为复杂的物体特征的拟合能力是有限的，从文章后面给出的人物的效果可以发现）。本方案主要包括三部分：
+
+!> 2.1Text embeddings
+
+文本编码器首先对输入描述Prompt文本进行分词，将文本序列拆分为token序列。然后，通过查询词表将将文本进行embedding化，其中特殊字符$S_{*}$ 构建时不和词表中的词相同，作为词表中新增的一个token，并且其对应的embedding为随机初始化$v_x$
+ 。通过将$v_x$与描述文本一同进行编码为$c_{\theta}$ 
+ ，进而"引导"生成模型生成目标内容。
+
+!> 2.2 Latent Diffusion Models
+
+这部分是目前Diffusion模型中应用最广泛的方式，原理参考[改善Diffusion效率问题，Latent Diffusion Model(for stable diffusion)](https://zhuanlan.zhihu.com/p/556302507)
+
+!> 2.3 Textual inversion
+
+该方案训练目标依然是最小化重构损失：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p5.png" /> 
+</div>
+
+训练数据只需要3~5张目标图片，其对于的prompt文本是由模板构建，例如`“A photo of S∗”, “A rendition of S∗”`。训练GPU为`2*V100`，对剑学习率0.005，训练步数约5000左右最佳。
+
+**3. 实验结果**
+
+本方案从以下几个方面进行了实验效果验证：
+
+!> 3.1 目标内容复现
+
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p6.png" /> 
+</div><p align=center> Figure 3: Object variations generated using our method, the CLIP-based reconstruction of DALLE-2 (Ramesh et al., 2022), and human captions of varying lengths.</p>
+
+!> 3.2 文本引导效果合成
+
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p7.png" /> 
+</div><p align=center> Figure 4: Additional text-guided personalized generation results.</p>
+
+!> 3.3 风格迁移
+
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p8.png" /> 
+</div><p align=center> Figure 6: The textual-embedding space can represent more abstract concepts, including styles.</p>
+
+!> 3.4 多内容效果组合
+
+<div align=center>
+    <img src="zh-cn/img/ch5/7-1/p9.png" /> 
+</div><p align=center> Figure 7: Compositional generation using two learned pseudo-words.</p>
+
+实践中发现该方案对于特征比较精细的内容难以学习的比较准确，例如人脸、服装等。适合做一个简单风格类或者表情这方面。
+
+
+##### 3.3.2 HyperNetwork
+<!-- hyperNetworks； https://zhuanlan.zhihu.com/p/632909746 -->
+<!-- https://zhuanlan.zhihu.com/p/632909746 -->
+
+!> arxiv: https://arxiv.org/pdf/1609.09106v3.pdf
+
+!> github: https://github.com/antis0007/sd-webui-multiple-hypernetworks
+
+**1. 简述**
+
+超网络（HyperNetworks）是Google在16年提出的一种模型微调方案，其主要通过微调小参数模型结构去替代原大模型中的权重矩阵（这个思路和后面的LoRA的思路相，详见：最流行的训练方式Lora）。Google将该方案在深度卷积模型和长序列循环网络模型中进行验证。1. 在LSTM中实现了非共享的参数layer效果，在多种生成式下游任务中取得了SOTA的效果，例如：语言模型、机器翻译等。2. 在CNN类结构的图像识别类任务中也取得了SOTA的效果。
+
+例如下图中，原大模型中参数$W_1$和$W_2$可以通过超网络结构$g(z^j)$ 
+其中$j=1,2,...$来替换。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p1.jpg" /> 
+</div><p align=center> Figure 1: A hypernetwork generates the weights for a feedforward network.</p>
+
+**2. 具体方案**
+
+本文分别从两类极端模型结构上进行了超网络效果的验证，即一个是深度模型、一个是循环模型。循环模型每一步特征在参数共享的模型中进行循环传递，这样容易导致梯度消失/梯度爆炸（当然后续有改进方案，例如LSTM、GRU等）。深度卷积模型纵向layer之间不进行参数共享，使得整个模型随着深度的增加变得冗余。超网络介于两者之间，可以看作为一种弹性的参数共享。超网络在两类模型上的具体应用细节如下：
+
+!> 2.1 静态超网络：deep CNN中的权重因式分解
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p2.png" /> 
+</div><p align=center> A hypernetwork generates the weights for CNN</p>
+
+将CNN中的卷积核$K^j$采用小参数网络$g(z^j)$进行替代，如上图所示。替代的网络模型$g(z^j)$数学表达式为
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p3.png" /> 
+</div>
+
+这样其可训练参数量包括$W_i,B_i,W_{out},B_{out}$ 
+以及$z^j$,其参数量大小为$N_z\*D +D\*(N_z+1)\*N_i+f_{size}\*N_{out}\*f_{size}\*(d+1)$
+ ，相比原参数要小很多（注意公式中$W_{out}$
+和$B_{out}$为共享参数），文中也解释了分两层结构可以减少模型参数，使模型更加紧凑。对于不同大小的卷积核，本文将整块拆分为不同数量的相同小块，将乘操作转为加操作。文章还通过对比使用展示了超网络对原大模型权重的学习能力，例如下图：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p4.png" /> 
+</div><p align=center>Figure 2: Kernels learned by a ConvNet to classify MNIST digits (left). Kernels learned by a hypernetwork generating weights for the ConvNet (right).</p>
+
+两者可视化展示出了主要特征的相似性，说明了超网络可以用小参数来学习大模型中参数量更大的权重。
+
+!> 2.2 动态超网络：RNN中的自适应权重生成
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p5.png" /> 
+</div><p align=center>ADAPTIVE WEIGHT GENERATION FOR RECURRENT NETWORKS</p>
+
+本文针对RNN中的网络结构提出动态超网络，该网络中参数权重随着$t$发生变化。部分参数共享，这样成为relaxed weight-sharing，CNN与RNN中参数的特点。将超参数应用在RNN中的模型成为HyperRNN。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p6.png" /> 
+</div><p align=center>RNN与HyperRNN公式对比</p>
+
+从上面结构图和公式对比可以看出，HyperRNN自身也形成了RNN结构，这样原大模型RNN中不同层的参数是不一样的，并且可以通过调整超参数中参数的维度使得HyperRNN的参数量远低于原大模型的参数量。详细的参数计算就不写了，看论文吧，公式太多了，敲起来手疼。
+
+**3. 实验结果**
+
+实验部分针对静态超网络和动态超网络分别进行了多种任务的对比实验。包括针对静态超网络的图像识别，数据集为MNIST和CIFAR-10。针对动态超网络的语言模型和手写识别任务，数据集为Penn Treebank和Hutter Prize Wikipedia。
+
+结果：hypernetwork：99.24%， baseline:99.28%，超网络参数是原模型1/3，效果却接近。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p7.png" /> 
+</div><p align=center>Table 2: CIFAR-10 Classification with hypernetwork generated weights.</p>
+
+结果：超网络参数是原模型1/6~1/15，效果相差2%。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p8.png" /> 
+</div><p align=center>Table 3: Bits-per-character on the Penn Treebank test set.</p>
+
+结果：超网络参数如果和原模型相近，效果略高。
+
+动态超网络方面的结果为：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/8-1/p9.png" /> 
+</div><p align=center>Table 4: Bits-per-character on the enwik8 test set.</p>
+
+结果：超网络参数如果和原模型相近，效果略高。
+
+##### 3.3.3 Aesthetic Gradients:Personalizing Text-to-Image Generation via Aesthetic Gradients
+
+<!-- https://zhuanlan.zhihu.com/p/629635371 -->
+
+!> arxiv: https://arxiv.org/abs/2209.12330
+
+!> github: https://github.com/vicgalle/stable-diffusion-aesthetic-gradients
+
+**1. 简述**
+
+这篇文章是对Stable Diffusion模型进行微调的一种方案，实现图片生成风格的自定义，创建独特的美学风格。
+
+本方案核心idea理解起来比较简单，即通过微调文本编码器（clip text encoder）将文本编码输出表示由原特征空间A投影到另外的"美学"特征空间B，进而在diffusion去噪过程中，逐步生成具备该"美学"风格的图片内容。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/9-1/p1.png" /> 
+</div><p align=center>原特征空间A投影到另外的美学特征空间B.</p>
+
+由于这种特征空间的转换是在微调时通过控制clip text encoder训练时的"梯度"朝着“美学”风格方向收敛，所以该方案命名为"Aesthetic Gradients，美学梯度"模型定制化方案。
+
+下面是文中的两种微调后的美学风格生成的效果，两种美学风格分别是基于SAC8+和LAION7+数据训练的，效果如下图所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/9-1/p2.png" /> 
+</div><p align=center>Figure 1: Stable diffusion generations for the original model and personalized variants using SAC8+ and LAION7+ aesthetic embeddings.</p>
+
+在保持主要内容和整体构图的情况下，画面的风格确实发生了明显的变化。
+
+**2. 具体方案**
+
+<div align=center>
+    <img src="zh-cn/img/ch5/9-1/p3.png" /> 
+</div><p align=center>Stable Diffusion的模型结构</p>
+
+Stable Diffusion模型生成图片的主要流程是：通过文本编码器（Text Encoder），常用的有Bert、T5、CLIP等，这里实验CLIP模型中的文本编码器部分，将描述文本Prompt进行编码，然后作为Condition插入到Unet模型中，去引导模型一步步生成目标图片。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/9-1/p4.png" /> 
+</div>
+
+以上就是本文方案的主要思路了。
+
+**3. 实验结果**
+
+本文构建了两类美学数据集$SAC_{8+}$和$LION_{7+}$
+ ，分别训练CLIP中text encoder，并且说明该方案具备泛化性，构建了25个不同复杂长度的prompt文本。下面展示部分效果图，完整的结果就去看论文吧。
+
+ <div align=center>
+    <img src="zh-cn/img/ch5/9-1/p5.png" /> 
+</div><p align=center>Figure 3: Further qualitative results using different aesthetic embeddings.（节选）</p>
+
+**4. 写在最后**
+
+该方案主要是进行风格训练，且需要具备相同美学特征的图构建为美学数据集，所以这个数据集中包含的图片内容需要较为全面，这样得到的e特征向量才是位于比较有明显特定美学风格特征的特征空间中心位置。该类风格效果其实比较明显，并且前后的构图基本相似，代码开源了对其细节感兴趣的就去拆代码吧。
+
+ 
+#### 3.4 LyCORIS (LoCon和LoHa)
+<!--  https://zhuanlan.zhihu.com/p/631370055
+https://www.bilibili.com/read/cv23398173/
+ -->
+<!-- https://www.dongwm.com/post/stable-diffusion-models/ -->
+<!-- http://www.dtmao.cc/python/104959.html -->
+
+LyCORIS (Lora beYond Conventional methods) 是最近开始流行的一种新的模型，如其名字是一种超越传统方法的 Lora，但是要比 LoRA 能够微调的层级多，它的前身是 LoCon (LoRA for convolution layer)。
+
+LoCon 和 LoHA (LoRA with Hadamard Product representation) 都是 LyCORIS 的模型算法，如果 C 站模型下载页面如果明确说是 LoCon 那就是 LoHA
+
+现在 stable-diffusion-webui 还没有自带它，所以需要先安装扩展:https://github.com/KohakuBlueleaf/a1111-sd-webui-lycoris。 
+
+**1.LoCon：Lora for convolution**
+
++ 将Lora扩展到卷积层。
++ 方法：
+    - 在代码上只是将低了卷积的输出通道数
+    - 理论：将一个卷积核（一个通道）展开，可以看成是参数矩阵的一列。将所有卷积核按列排布可以得到类似于transformer中的参数矩阵，即卷积操作也是矩阵相乘。通过降低channel数再提高channel数实现降低参数量的目的
+    
+ <div align=center>
+    <img src="zh-cn/img/ch5/10-1/p1.png" /> 
+</div>
+
+**2.LoHa：LoRA with Hadamard Product representation**
+
++ 对Lora的改进，将hadamard product(矩阵对应元素相乘，区别矩阵点乘)应用到矩阵低秩分解中。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/10-1/p2.png" /> 
+</div>
+
+传统的低秩分解算法，需要保证分解后的秩的维度小于2R，而通过LoHa的进一步拆解，使得矩阵的秩扩展到 $R^2$,解决了原生LoRA受到低秩的限制。
+
++ 总结
+    - LoCon和RoHa都能实现更细粒度的微调。LoCon可以对实现更细粒度的控制，从全图的调整优化为细粒度的部件调整。RoHa更注重于低秩矩阵分解本身，引入Hadamard Product，将秩的维度 从2R扩展到 $R^2$。这两个插件都包含在LyCORIS库
+    - Lora可以和其他微调方法一起使用以降低微调参数量，常用的是和DreamBooth一起降低参数量
+这些方法需要的数据量都较小。一般来讲，微调的参数量越多，需要的数据量也越大（DreamBooth例外）
+一般而言，数据越多，效果越好
+
+<div align=center>
+    <img src="zh-cn/img/ch5/10-1/p3.png" /> 
+</div>
+
+#### 3.5 基于太乙stable diffusion的医疗文生图微调及应用
+ 
+
+#### 3.6 ControlNet
+
 
 
 
