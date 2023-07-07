@@ -1,5 +1,11 @@
 ## Diffusion Model
 
+!> 李宏毅课程： https://www.bilibili.com/video/BV1ss4y1B7v2?p=1&vd_source=def8c63d9c5f9bf987870bf827bfcb3d
+
+!> https://speech.ee.ntu.edu.tw/~hylee/ml/2023-spring.php
+
+<!-- https://www.bilibili.com/video/BV1fk4y1J753/?spm_id_from=333.788.recommend_more_video.3&vd_source=def8c63d9c5f9bf987870bf827bfcb3d -->
+
 ------
 
 <!-- DALLE, Stable diffusion -->
@@ -857,20 +863,214 @@ pipe = DiffusionPipeline.from_pretrained(
 pipe.enable_xformers_memory_efficient_attention()
 ```
 
-**7.Stable Diffusion的常用调度算法**
+**7.Stable Diffusion的常用采样方法(调度算法)**
 
 <!-- PNDM，DDIM，K-LMS -->
+<!-- https://zhuanlan.zhihu.com/p/612572004 -->
 
-TODO
+<!-- https://post.smzdm.com/p/aev65x7z/
+https://zhuanlan.zhihu.com/p/612572004
+https://zhuanlan.zhihu.com/p/621083328
 
+https://www.bilibili.com/video/BV1iW4y1D7RW/?spm_id_from=333.337.search-card.all.click&vd_source=def8c63d9c5f9bf987870bf827bfcb3d
 
+百度：链接：https://pan.baidu.com/s/1raib0i7D2JrpFC_wJoD8yg?pwd=Et51 
+提取码：Et51 -->
 
-**8.Classifier-free guidance，guidance_scale，CFG**
+!> 什么是Stable diffusion
+
+Stable diffusion是一中潜在扩散模型（latent diffusion model），这里面除了模型这两个字，潜在和扩散听上去就不太像人话了，这里我们先弄明白什么是扩散模型，它是在训练图像上逐渐添加噪声，最后变成完全随机噪声图。这个过程就像是一滴墨水滴在一杯清水里，会慢慢扩散最终均匀分布在清水里一样，扩散这个名字就是那么来的，参考[下图](https://stable-diffusion-art.com/how-stable-diffusion-work/)：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/3-1/p16.png" /> 
+</div>
+
+这是一个前向扩散的过程，因为让一张图片越来越模糊没什么技术含量。
+
+而扩散模型就是通过训练让上述过程获得逆向从随机噪声图生成清晰图像的过程。实现下图的过程，而训练的重点就是下图中的噪声预测器（noise predictor），它可以通过训练得出每次需要减掉的噪声，每次需要减多少噪声是预测出来的，这就是一个叫U-net的模型（先请记住它，下面还会反复提它），从而实现还原清晰图片的目的。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/3-1/p17.png" /> 
+</div>
+
+但是，这个过程无论是模型训练，还是推理（你生成图片的过程）都是非常贵的，需要海量的算力支持和内存需求，而stable diffusion就是让它不那么贵的解决方案，核心思想也很简单：压缩图像，它通过一个叫变分自编码器（VAE）的模型，把图像压缩到它亲妈都不认识到的程度，甚至把此类压缩方式称作降维，这种降维级别的压缩且不丢失重要信息与一套理论相关，即流形假说（Manifold hypothesis），认为高维空间的数据集可以对应到低维的潜在流形（latent manifolds ）上，训练需要找到就是一些共同的高维特征。所以经过此压缩后，这个时候图像被称作低维潜在（latent）的"图像"，作为U-net的输入，去了潜空间（latent space），请参考下图标注latent space的绿色区域，也就是U-net现在工作的地方。在低维的潜空间里一步一步降噪后，完成反向扩散的低维“图片”还得通过VAE的解码器，把图像从潜空间转换回像素空间（pixel space）。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/2-1/p9.png" /> 
+</div>
+
+但是这张图片中好像除了刚刚提到潜空间和像素空间，其余的内容是什么鬼我们目前还不知道，目前的重点是压缩，因为这是让反向扩散推理以生成图片的基石，它让Stable Diffusion在消费级GPU上运行成为了可能。下面聊Stable diffusion的具体工作流程。图片来源[1]
+
+!> 三大核心组成部分
+
++ VAE：包括Encoder编码器和Decoder解码器，用于图像从像素空间到潜空间的转换，或者叫降维或升维，由于用于降维的VAE Encoder 只在训练模型的阶段使用，推理过程（图像生成）只需要VAE Decoder解码器就ok了，而网上常见的VAE文件，就是对这个VAE Decoder解码器的微调改进版本，用于解决角色面部眼睛等细节方面的问题。
++ U-net：输出预测的噪声残差，用于每次迭代过程的降噪，提供了交叉注意力层，并且通过交叉注意力机制来消耗CLIP提供的条件文本嵌入U-net，输出预测的噪声残差，实现有条件（被文本指挥）的迭代降噪。
++ CLIP：将Prompt文本转化成能够让U-net使用的嵌入（embedding），达到实现文本作为条件生成图片的过程，这里反复提到嵌入这个概念是因为，可以通过微调的方式，发出带有关键词的embedding，用于调整图片的样式。你能下载到的textual inversion就是通过这种方式实现调整生成图像效果的，优点是文件的体积非常小。
+
+!> 整体工作流程
+
+见下图[2]：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/3-1/p6.png" /> 
+</div>
+
+SD在潜空间生成随机的张量，你也可以设置种子（seed）来控制这个初始值，特定的初始值可以起到固定的作用。然后这个在潜在种子生成64 x 64的潜空间图像，Prompt通过CLIP转化77 x 768条件文本嵌入（embedding）；
+
+U-net以这个嵌入为条件，对潜空间图像迭代降噪。U-net输出噪声的残差，通过调度器（scheduler）进行降噪计算并返回本轮的去噪样本，（而这个调度器也叫采样器或者求解器，对应了不同的算法，有各种优缺点）；
+
+在迭代50次后（取决于你选择的采样方法，有些20次迭代就可以达到高质量的结果），最后VAE的解码器把最终的潜空间图像转化输入到像素空间，即我们能看到的像素图片，整个工作流到此结束，你得到了结果图片。
+
+这就stable diffusion的文生图大致工作原理。
+
+!> 采样方法（SD-Webui）
+
+Stable diffusion webui是Stable diffusion的GUI是将stable diffusion实现可视化的图像用户操作界面，它本身还集成了很多其它有用的扩展脚本。
+
+webui中集成了很多不同的采样方法，（上述提到的调度算法）这块也是目前AI艺术家们乐忠对比的环节，这里结合设置中提供的选项，简单粗略的介绍下它们的各自区别。
+
+这些大部分的采样器是由Katherine Crowson根据论文实现的功能，stable diffusion官方的blog也提到过她，她在github中有一个名为[K-diffusion](https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/sampling.py)的项目[3]，理论基础主要基于Jiaming Song等人的论文[4]、Karras等人的论文[5]以及前不久基于Cheng Lu等人的论文[6]
+
+按照SD webui的顺序
+
++ **Euler**
+
+基于Karras论文，在K-diffusion实现，20-30steps就能生成效果不错的图片，采样器设置页面中的 sigma noise，sigma tmin和sigma churn这三个属性会影响到它（后面会提这三个参数的作用）；
+
++ **Euler a**
+
+使用了祖先采样（Ancestral sampling）的Euler方法，受采样器设置中的eta参数影响（后面详细介绍eta）；
+
++ **LMS**
+
+线性多步调度器（Linear multistep scheduler）源于K-diffusion的项目实现；
+
++ **heun**
+
+基于Karras论文，在K-diffusion实现，受采样器设置页面中的 sigma参数影响；
+
++ **DPM2**
+
+这个是Katherine Crowson在K-diffusion项目中自创的，灵感来源Karras论文中的DPM-Solver-2和算法2，受采样器设置页面中的 sigma参数影响；
+
++ **DPM2 a**
+
+使用了祖先采样（Ancestral sampling）的DPM2方法，受采样器设置中的ETA参数影响；
+
++ **DPM++ 2S a**
+
+基于Cheng Lu等人的论文（改进后，后面又发表了一篇），在K-diffusion实现的2阶单步并使用了祖先采样（Ancestral sampling）的方法，受采样器设置中的eta参数影响；Cheng Lu的github中也提供已经实现的代码，并且可以自定义，1、2、3阶，和单步多步的选择，webui使用的是K-diffusion中已经固定好的版本。对细节感兴趣的小伙伴可以参考Cheng Lu的github和原论文。
+
++ **DPM++ 2M**
+
+基于Cheng Lu等人的论文（改进后的版本），在K-diffusion实现的2阶多步采样方法，在Hagging face中Diffusers中被称作已知最强调度器，在速度和质量的平衡最好。这个代表M的多步比上面的S单步在采样时会参考更多步，而非当前步，所以能提供更好的质量。但也更复杂。
+
++ **DPM++ SDE**
+
+基于Cheng Lu等人的论文的，DPM++的SDE版本，即随机微分方程（stochastic differential equations），而DPM++原本是ODE的求解器即常微分方程（ordinary differential equations），在K-diffusion实现的版本，代码中调用了祖先采样（Ancestral sampling）方法，所以受采样器设置中的ETA参数影响；
+
++ **DPM fast**
+
+基于Cheng Lu等人的论文，在K-diffusion实现的固定步长采样方法，用于steps小于20的情况，受采样器设置中的ETA参数影响；
+
++ **DPM adaptive**
+
+基于Cheng Lu等人的论文，在K-diffusion实现的自适应步长采样方法，DPM-Solver-12 和 23，受采样器设置中的ETA参数影响；
+
++ **Karras后缀**
+
+LMS Karras 基于Karras论文，运用了相关Karras的noise schedule的方法，可以算作是LMS使用Karras noise schedule的版本；
+
+DPM2 Karras，DPM2 a Karras，DPM++ 2S a Karras，DPM++ 2M Karras，DPM++ SDE Karras这些含有Karras名字的采样方法和上面LMS Karras意思相同，都是相当于使用Karras noise schedule的版本；
+
++ **DDIM**
+
+“官方采样器”随latent diffusion的最初repository一起出现， 基于Jiaming Song等人的论文，也是目前最容易被当作对比对象的采样方法，它在采样器设置界面有自己的ETA；
+
++ **PLMS**
+
+同样是元老，随latent diffusion的最初repository一起出现；
+
++ **UniPC**
+
+最新被添加到webui中的采样器，基于Wenliang Zhao等人的论文[7]，应该是目前最快最新的采样方法，10步就可以生成高质量结果；在采样器设置界面可以自定义的参数目前也比较多
+
++ **UniPC variant**
+
+bh1和bh2和vary_coeff是三种变体
+
+hugging face的团队在diffuser中给出了他们的建议：bh1适合在无条件（没指挥，无引导）且步数小于10情况下使用，其余情况全部使用bh2。
+
+至于vary_coeff这个，作者在论文中实验对比了在“无条件”的和bh1和bh2的区别，即bh1在5，6步表现最好，vary_coeff在7，8或9表现最好，10步以上还是bh2。
+
+由于我们在webui的使用场景使用提示词就是“有条件”了，所以看上去bh2更合适，除非你热衷于10步以内生成图片，但webui的github上有人反应vary_coeff生成的图片背景细节更加丰富[8]。我个人使用下来看，区别不算大，可以自己对比。
+
+一句话总结：懒得对比的话就默认bh2。
+
++ **UniPC skip type**
+
+如果你生成的图片是512 x 512或者更大的话，选uniform。它更适合高分辨率图（512目前相对算高分别率）logSNR适合低分别率
+
+logSNR在512 x 512下会出现一些奇怪的细节（模型SD1.5），quadratic稍微好一些,结论：512 x 512细节更合理， 推荐uniform
+
++ 采样方法小结
+
+1.建议根据自己使用的checkpoint使用脚本跑网格图（用自己关心的参数）然后选择自己想要的结果。
+
+2.懒得对比：请使用DPM++ 2M或DPM++ 2M Karras或UniPC，想要点惊喜和变化，Euler a、DPM++ SDE、DPM++ SDE Karras、DPM2 a Karras（注意调正对应eta值）
+
+3.eta和sigma都是多样性相关的，但是它们的多样性来自步数的变化，追求更大多样性的话应该关注seed的变化，这两项参数应该是在图片框架被选定后，再在此基础上做微调时使用的参数。
+
+!> 参考文献
+
+1. High-Resolution Image Synthesis with Latent Diffusion Models https://arxiv.org/abs/2112.10752
+2. how-stable-diffusion-work https://huggingface.co/blog/stable_diffusion#how-does-stable-diffusion-work
+3. k_diffusion/sampling https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/sampling.py
+4. Denoising Diffusion Implicit Models https://arxiv.org/abs/2010.02502
+5. Elucidating the Design Space of Diffusion-Based Generative Models https://arxiv.org/abs/2206.00364
+6. DPM-Solver: A Fast ODE Solver for Diffusion Probabilistic Model Sampling in Around 10 Steps https://arxiv.org/abs/2206.00927
+7. UniPC: A Unified Predictor-Corrector Framework for Fast Sampling of Diffusion Models https://arxiv.org/abs/2302.04867
+8. UniPC Sampler support https://github.com/easydiffusion/sdkit/pull/12
+9. CodeFormer https://github.com/sczhou/CodeFormer
+10. GFPGAN https://github.com/TencentARC/GFPGAN
+11. Face restoration in webui https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#face-restoration
+12. ai-upscaler https://stable-diffusion-art.com/ai-upscaler/
+13. ESRGAN https://github.com/xinntao/Real-ESRGAN
+14. SwinIR https://github.com/JingyunLiang/SwinIR
+
+<div align=center>
+    <img src="zh-cn/img/ch5/3-1/Snipaste_2023-06-27_19-00-13.jpg" /> 
+</div>
+
+<div align=center>
+    <img src="zh-cn/img/ch5/3-1/Snipaste_2023-06-27_19-00-32.jpg" /> 
+</div>
+
+**8.Classifier-free guidance（CFG）和Classifier-Guidance**
 
 <!-- CFG的论文Classifier-Free Diffusion Guidance -->
 
-TODO
+<!-- https://zhuanlan.zhihu.com/p/623837604
 
+https://zhuanlan.zhihu.com/p/582880086
+https://zhuanlan.zhihu.com/p/607225186
+https://zhuanlan.zhihu.com/p/640631667 -->
+
+<!-- https://www.bilibili.com/video/BV1ch4y1W7JB/?spm_id_from=333.337.search-card.all.click&vd_source=def8c63d9c5f9bf987870bf827bfcb3d -->
+
+<!-- https://www.bilibili.com/video/BV1m84y1e7hP/?spm_id_from=333.337.search-card.all.click&vd_source=def8c63d9c5f9bf987870bf827bfcb3d -->
+
+!> https://arxiv.org/pdf/2105.05233.pdf
+
+!> https://arxiv.org/pdf/2207.12598.pdf
+
+<!-- https://zhuanlan.zhihu.com/p/623837604 -->
+
+<object data="zh-cn/img/ch5/3-1/Conditional Control（Classifier-Guidance and Classifier-Free） .pdf" type="application/pdf" width="1100px" height="650px">
+<!--     <embed src="http://www.africau.edu/images/default/sample.pdf">
+        <p>This browser does not support PDFs. Please download the PDF to view it: <a href="http://www.africau.edu/images/default/sample.pdf">Download PDF</a>.</p>
+    </embed> -->
+</object>
 
 ------
 
