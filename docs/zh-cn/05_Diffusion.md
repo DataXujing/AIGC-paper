@@ -1066,7 +1066,7 @@ https://zhuanlan.zhihu.com/p/640631667 -->
 
 <!-- https://zhuanlan.zhihu.com/p/623837604 -->
 
-<object data="zh-cn/img/ch5/3-1/Conditional Control（Classifier-Guidance and Classifier-Free） .pdf" type="application/pdf" width="1100px" height="650px">
+<object data="zh-cn/img/ch5/3-1/Conditional Control（Classifier-Guidance and Classifier-Free） .pdf" type="application/pdf" width="100%" height="650px">
 <!--     <embed src="http://www.africau.edu/images/default/sample.pdf">
         <p>This browser does not support PDFs. Please download the PDF to view it: <a href="http://www.africau.edu/images/default/sample.pdf">Download PDF</a>.</p>
     </embed> -->
@@ -2827,14 +2827,441 @@ LoCon 和 LoHA (LoRA with Hadamard Product representation) 都是 LyCORIS 的模
 </div>
 
 #### 3.5 基于太乙stable diffusion的医疗文生图微调及应用
- 
+
+<!-- https://www.zhihu.com/tardis/zm/art/641325338?source_id=1005 -->
+<!-- https://github.com/IDEA-CCNL/Fengshenbang-LM#%E5%AE%89%E8%A3%85 -->
+
+<!-- https://17yongai.com/1624.html -->
+
+<!-- https://github.com/IDEA-CCNL/Fengshenbang-LM/issues/346 -->
+
+<!-- https://github.com/IDEA-CCNL/Fengshenbang-LM/blob/main/fengshen/examples/stable_diffusion_chinese/taiyi_handbook.md -->
+
+<!-- https://docs.qq.com/doc/DWklwWkVvSFVwUE9Q -->
+
+太乙stable diffusion model是首个中文stable diffusion模型，开发团队是：DEA 研究院封神榜团队在过去快速积累的基础上，其技术文档如下：
+
+<object data="zh-cn/img/ch5/11-1/太乙绘画使用手册1.1.pdf" type="application/pdf" width="100%" height="650px">
+<!--     <embed src="http://www.africau.edu/images/default/sample.pdf">
+        <p>This browser does not support PDFs. Please download the PDF to view it: <a href="http://www.africau.edu/images/default/sample.pdf">Download PDF</a>.</p>
+    </embed> -->
+</object>
+
+
+!> 构建自己的数据集
+
+我们想让其生成一些消化内镜的图像，使用文生图的方式实现，输入文本prompt,生成$512 \times 512$的内镜图像，其数据集的构建如下图所示：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/11-1/p1.jpg" /> 
+</div>
+
+!> 环境安装
+
+我们使用NGC上的Pytorch的镜像，镜像的版本为：`nvcr.io/nvidia/pytorch:23.03-py3`
+
+通过如下命令进入容器：
+
+```sh
+nvidia-docker run -it -v /home/myuser/LLMs/Fengshenbang-LM-main:/workspace/diffusion -p 5055:5055 -p 5056:5056 -p 5067:5057 nvcr.io/nvidia/pytorch:23.03-py3
+```
+
+安装需要的package
+
+```sh
+torch==2.0.1+cu118
+torchvision==0.15.2+cu118
+xformers== 0.0.20
+diffusers==0.18.1
+transformers==4.30.2
+```
+
+注意: `pip uninstall transformer_engine`,否则会报错!
+
+安装`fengshenbang`
+
+```sh
+cd diffusion
+pip install --editable .
+```
+
+!> finetune
+
+上面章节我们详细介绍了stable diffusion中的微调方法包括DreamBooth,LoRA,textual inversion,hypernetwork,Aesthetic Gradients和LyCORIS等，下面我们基于消化内镜图像进行微调太乙stable diffusion model.
+
+下载预训练的模型：https://huggingface.co/IDEA-CCNL/Taiyi-Stable-Diffusion-1B-Chinese-v0.1
+
+```sh
+cd Fengshenbang-LM-main/fengshen/examples/finetune_taiyi_stable_diffusion
+```
+
+
+修改`finetune.sh`文件
+
+```sh
+#!/bin/bash
+#SBATCH --job-name=finetune_taiyi # create a short name for your job
+#SBATCH --nodes=1 # node count
+#SBATCH --ntasks-per-node=8 # number of tasks to run per node
+#SBATCH --cpus-per-task=30 # cpu-cores per task (>1 if multi-threaded tasks)
+#SBATCH --gres=gpu:8 # number of gpus per node
+#SBATCH -o %x-%j.log # output and error log file names (%x for job id)
+#SBATCH -x dgx050
+
+# pwd=Fengshenbang-LM/fengshen/examples/pretrain_erlangshen
+# ROOT_DIR=../../workspace
+ROOT_DIR=./
+
+
+export TORCH_EXTENSIONS_DIR=${ROOT_DIR}/torch_extendsions
+
+MODEL_NAME=taiyi-stablediffusion-1B
+MODEL_ROOT_DIR=$ROOT_DIR/${MODEL_NAME}
+if [ ! -d ${MODEL_ROOT_DIR} ];then
+  mkdir ${MODEL_ROOT_DIR}
+fi
+
+NNODES=1
+GPUS_PER_NODE=1
+
+MICRO_BATCH_SIZE=1
+
+# 如果你不用Deepspeed的话 下面的一段话都可以删掉 Begin
+CONFIG_JSON="$MODEL_ROOT_DIR/${MODEL_NAME}.ds_config.json"
+ZERO_STAGE=1
+# Deepspeed figures out GAS dynamically from dynamic GBS via set_train_batch_size()
+cat <<EOT > $CONFIG_JSON
+{
+    "zero_optimization": {
+        "stage": ${ZERO_STAGE}
+    },
+    "bf16": {
+        "enabled": false
+    },
+    "train_micro_batch_size_per_gpu": $MICRO_BATCH_SIZE
+}
+EOT
+export PL_DEEPSPEED_CONFIG_PATH=$CONFIG_JSON
+### End
+
+DATA_ARGS="\
+        --dataloader_workers 1 \
+        --train_batchsize $MICRO_BATCH_SIZE  \
+        --val_batchsize $MICRO_BATCH_SIZE \
+        --test_batchsize $MICRO_BATCH_SIZE  \
+        --datasets_path ./mc_dataset \
+        --datasets_type txt \
+        --resolution 512 \
+        "
+
+MODEL_ARGS="\
+        --model_path pretrain/Taiyi-Stable-Diffusion-1B-Chinese-v0.1 \
+        --learning_rate 1e-4 \
+        --weight_decay 1e-1 \
+        --warmup_ratio 0.01 \
+        "
+
+MODEL_CHECKPOINT_ARGS="\
+        --save_last \
+        --save_ckpt_path ${MODEL_ROOT_DIR}/ckpt \
+        --load_ckpt_path ${MODEL_ROOT_DIR}/ckpt/last.ckpt \
+        "
+
+TRAINER_ARGS="\
+        --max_epoch 10 \
+        --gpus $GPUS_PER_NODE \
+        --num_nodes $NNODES \
+        --strategy deepspeed_stage_${ZERO_STAGE} \
+        --log_every_n_steps 100 \
+        --precision 32 \
+        --default_root_dir ${MODEL_ROOT_DIR} \
+        --replace_sampler_ddp False \
+        --num_sanity_val_steps 0 \
+        --limit_val_batches 0 \
+        "
+# num_sanity_val_steps， limit_val_batches 通过这俩参数把validation关了
+
+export options=" \
+        $DATA_ARGS \
+        $MODEL_ARGS \
+        $MODEL_CHECKPOINT_ARGS \
+        $TRAINER_ARGS \
+        "
+
+python3 finetune.py $options
+#srun -N $NNODES --gres=gpu:$GPUS_PER_NODE --ntasks-per-node=$GPUS_PER_NODE --cpus-per-task=20 python3 pretrain_deberta.py $options
+
+```
+
+
+开始微调：
+
+```sh
+./finetune.sh
+```
+
+<div align=center>
+    <img src="zh-cn/img/ch5/11-1/p1.png" /> 
+</div>
+
+显示log:
+
+```
+tensorboard --logdir=version_0/  --port=5055
+```
+
+<div align=center>
+    <img src="zh-cn/img/ch5/11-1/p2.png" /> 
+</div>
+
+
+!> 基于gradio的demo开发测试
+
+```python
+from diffusers import DiffusionPipeline
+import gradio as gr
+# 可以在代码中快速关闭NSFW（Not safe for work）检测：https://borrowastep.net/p/-stablediffusion-nsfw--8avcvhpmu
+pipeline = DiffusionPipeline.from_pretrained("./taiyi-stablediffusion-1B/hf_out_9_14780")
+pipeline = pipeline.to("cuda")
+
+def generate(text, steps):
+    image = pipeline(text,num_inference_steps=steps,guidance_scale=7.5).images[0]
+    return image
+
+if __name__ == "__main__":
+
+    demo = gr.Interface(title="太乙中文 stable diffusion 模型 微调生成内镜图像",
+        css="",
+        fn=generate,
+        inputs=[gr.Textbox(lines=3, placeholder="输入你想生成的图片描述", label="prompt"),gr.Slider(maximum=100, value=50, minimum=1, label='Step Time')],
+        outputs=[gr.outputs.Image(label="图片",type="pil")]
+        )
+
+    demo.launch(server_name="0.0.0.0",server_port=5056)
+```
+
+<div align=center>
+    <img src="zh-cn/img/ch5/11-1/p3.png" /> 
+</div>
+
+生成的效果还不错！！！
 
 #### 3.6 ControlNet
 
+<!-- https://zhuanlan.zhihu.com/p/609075353 -->
+
+<!-- https://juejin.cn/post/7210369671656505399 -->
+
+!> github: https://github.com/lllyasviel/ControlNet
+
+!> arxiv: https://arxiv.org/abs/2302.05543v1
 
 
+**1.ControlNet是干嘛的**
+
+我们知道现在文本到图像生成很火爆，你只需要输入文字就可以获得对应的输出，这个任务的发展多亏了扩散模型的发展。
+
+而我们今天要说的ControlNet的作用就是能够控制扩散模型，生成更接近用户需求的图。
+
+我们用几个图示范一下：
+假如我们只用文字去生成图像，我们给模型输入文本prompt：`A girl, long hair, blond hair, black eyes, black coat, winter, snow。`
+
+那模型会出来这些图：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p1.png" /> 
+</div>
+
+我们可以看到，我们输入的要素都符合了。但是差别又很大，大在哪里？每个妹子动作差异都好大。
+那现在我们就可以掏出ControlNet了，用ControlNet来控制你生成的人物的动作。
+比如下图这样，可以看到即使我换了画风（换了模型的checkpoint）生成的人物动作也是一样的， 并且满足我前边输入的条件。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p2.png" /> 
+</div>
+
+那我做了什么才让模型能稳定输出相同的人物动作呢？下面请出我们的仙女姐姐[尚尚](https://juejin.cn/user/105206371061245)：
+
+为我们生成的妹子提供动作的是我们的尚影嫣小姐姐，我把她的照片放到ControlNet中作为控制条件，这里使用的是ControlNet的Depth功能，ControlNet会根据小姐姐提取一个深度图，然后按照人物深度图轮廓去生成我们的人物。
+
+下图你看到的就是文本prompt控制和ControlNet图像条件控制相互作用的结果
+
+既符合文本prompt：`a girl, long hair, blond hair, black eyes, black coat, winter, snow`，又保持了小姐姐的大致动作形态。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p3.png" /> 
+</div>
+
+当然，如果我们把文字控制删除一点，只留下`a girl, long hair, black eyes`，我们可以得到更接近小姐姐原图的结果。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p4.png" /> 
+</div>
+
+好了，美女看完了，那我们就介绍一下这个论文吧。
 
 
+**2.ControlNet 网络设计**
+
+在一个扩散模型中，如果不加ControlNet的扩散模型，其中原始的神经网络
+$F$输入$x$获得$y$，参数$\theta$表示。
+$$y=f(x;\theta)$$
+
+也就是下图这个样子。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p5.png" /> 
+</div>
+
+ControlNet中，就是将模型原始的神经网络锁定，设为**locked copy**。
+然后将原始网络的模型复制一份，称之为**trainable copy**，在其上进行操作施加控制条件。然后将施加控制条件之后的结果和原来模型的结果相加获得最终的输出。
+经过这么一顿操作之后，施加控制条件之后，最后将原始网络的输出修改为：
+
+$$y_c=F(x;\theta)+ZF(x+Z(c;\theta_{z1});\theta_c);\theta_{z2})$$
+
+其中zero convolution，也就是零卷积层$Z$是初始化weight和bias为0，两层零卷积的参数为$\theta_{z1},\theta_{z2}$.
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p6.png" /> 
+</div>
+
+将控制条件通过零卷积之后，与原始输入相加，相加之后进入ControlNet的复制神经网络块中，将网络输出再做一次零卷积之后与原始网络的输出相加。
+
+初始化之后未经训练的ControlNet参数应该是这样的：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p7.png" /> 
+</div>
+
+也就是说ControlNet未经训练的时候，输出为0，那加到原始网络上的数字也是0。这样对原始网络是没有任何影响的，就能确保原网络的性能得以完整保存。之后ControlNet训练也只是在原始网络上进行优化，这样可以认为和微调网络是一样的。
 
 
+**3.ControlNet in Stable Diffusion**
 
+上一部分描述了ControlNet如何控制单个神经网络块，论文中作者是以Stable Diffusion为例子，讲了如何使用ControlNet对大型网络进行控制。下图可以看到控制Stable Diffusion的过程就是将Encoder复制训练，decoder部分进行skip connection。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p8.png" /> 
+</div>
+
+在这之前需要注意：
+
+Stable Diffusion有一个预处理步骤，将512×512的图片转化为64×64的图之后再进行训练，因此为了保证将控制条件也转化到64×64的条件空间上，训练过程中添加了一个小网络$E$将图像空间条件转化为特征图条件。
+$$c_f=E(c_i)$$
+
+这个网络$E$是四层卷积神经网络，卷积核为4×4，步长为2，通道16，32，64，128，初始化为高斯权重。这个网络训练过程是和整个ControlNet进行联合训练。或者我们可以把他的图改吧改吧，画成这样：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p9.png" /> 
+</div>
+
+**4.训练过程**
+
+训练的目标函数为：
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p10.png" /> 
+</div>
+
+使用的就是人家Stable Diffusion原始的目标函数改了改。
+
+先看一下原始的Stable Diffusion的目标函数：
+
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p11.png" /> 
+</div>
+
+将采样$z_t$使用网络$ϵ_θ$去噪之后和原图经过网络$ϵ$获得的潜变量计算$L_2$ loss，看其重建的效果。
+
+那再回到
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p12.png" /> 
+</div>
+
+将原始图像经过$\epsilon$之后获得潜变量，和经过网络$\epsilon_\theta$重建之后的图算$L_2$ loss。原来Stable Diffusion中解码器要处理的是采样$z_t$和时间步长$t$，在这里加了两个控制条件：
++ 文字prompt $c_t$
++ 任务相关的prompt $c_f$
+
+训练过程中将50 %的文本提示$c_t$随机替换为空字符串。这样有利于ControlNet网络从控制条件中识别语义内容。这样做的目的是，当Stable Diffusion没有prompt的时候，编码器能从输入的控制条件中获得更多的语义来代替prompt。（这也就是classifier-free guidance。）
+
+**5.效果！**
+
+这一部分作者主要是讲了如何训练不同控制条件的ControlNet的，训练方法感兴趣的自己看，这里简单展示一下作者提供好的训练出来的模型。用《青蛇劫起》里边小青做一下示范：
+
+> Canny Edge
+
+使用Canny边缘检测生成边缘线稿，再将作为扩散模型输入。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p13.png" /> 
+</div>
+
+> HED
+
+使用hed边界检测。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p14.png" /> 
+</div>
+
+> Depth
+
+使用深度图生成。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p15.png" /> 
+</div>
+
+> Normal Maps
+
+使用法线图生成图像。提供了Midas计算深度图并转换为法线图的扩展版本的模型。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p16.png" /> 
+</div>
+
+> Human Pose
+
+使用姿势检测，获得人体骨骼的可视化姿势图像。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p17.png" /> 
+</div>
+
+> User Sketching
+
+使用人类涂鸦进行生成。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p18.png" /> 
+</div>
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p19.png" /> 
+</div>
+
+> Semantic Segmentation
+
+使用语义分割。
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p20.png" /> 
+</div>
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p21.png" /> 
+</div>
+
+> Hough Line
+
+使用m-lsd直线检测算法。（论文中还提到了使用传统的霍夫变换直线检测）
+
+<div align=center>
+    <img src="zh-cn/img/ch5/12-1/p22.png" /> 
+</div>
+
+> 其他
+
+论文中还提到了其他的，比如动漫线稿之类的，但是没有提供对应的模型，所以这里无法展示，感兴趣的可以自己去看一下论文。
