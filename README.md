@@ -12,6 +12,9 @@
 - [x] 4.Clip
 - [x] 5.Diffusion Model
 
+## Star History
+[![Star History Chart](https://api.star-history.com/svg?repos=DataXujing/AIGC-paper&type=Date)](https://star-history.com/#DataXujing/AIGC-paper&Date)
+
 
 
 
