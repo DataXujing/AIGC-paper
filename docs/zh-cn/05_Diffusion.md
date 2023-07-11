@@ -3021,6 +3021,7 @@ tensorboard --logdir=version_0/  --port=5055
 from diffusers import DiffusionPipeline
 import gradio as gr
 # 可以在代码中快速关闭NSFW（Not safe for work）检测：https://borrowastep.net/p/-stablediffusion-nsfw--8avcvhpmu
+# https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/safety_checker.py
 pipeline = DiffusionPipeline.from_pretrained("./taiyi-stablediffusion-1B/hf_out_9_14780")
 pipeline = pipeline.to("cuda")
 

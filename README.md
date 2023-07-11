@@ -6,11 +6,11 @@
 
 生成式模型(AIGC)是目前研究的热点，我们将在如下几个部分介绍AIGC相关内容
 
-- [ ] 1.Prompt Learning
-- [ ] 2.大语言模型
-- [ ] 3.大视觉模型
-- [ ] 4.Clip
-- [ ] 5.Diffusion Model
+- [x] 1.Prompt Learning
+- [x] 2.大语言模型
+- [x] 3.大视觉模型
+- [x] 4.Clip
+- [x] 5.Diffusion Model
 
 
 
